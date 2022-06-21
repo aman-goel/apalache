@@ -63,6 +63,8 @@ Development on Apalache is distributed. As with any distributed system,
 establishing effective synchronization and consensus on key properties requires
 careful attention.
 
+### Claiming a token for WIP
+
 We synchronize and coordinate our work using GitHub issues. When an issue is
 assigned to someone (or to several people), it serves as a token indicating that
 substantive work on the item described on the issue is being done (or will be
@@ -75,6 +77,25 @@ A corollary is that untracked work, work for which no issue exists or no
 assignment has been claimed, cannot effectively be coordinated. To plan on, or
 engage in, substantive work that is untracked raises the risk of race conditions
 and disorganized effort.
+
+### Volunteering to curate a subset of the code
+
+Sometimes a contributor wants to be notified of any changes made to certain
+files. We refer to contributors who have taken on this responsibility as
+"curators" of the relevant code.
+
+To volunteer as a curator of some part of the codebase, add your GitHub handle
+to [.github/CODEOWNERS](.github/CODEOWNERS).
+
+### Locking WIP pending review
+
+Sometimes a contributor wants to ensure that they have a chance to review a
+[pull request](#making-a-pull-request) before the changes are landed in
+`unstable`. Contributors can lock the PR to prevent it from being merged before
+they can complete a review by leaving an empty review on the PR, requesting
+changes, along with a note like:
+
+> I'd like to be sure I review this before it is merged.
 
 ## Decision Making
 
@@ -104,7 +125,8 @@ of landing changes:
 
 ## Making a pull request
 
-We develop on the `unstable` branch and release stable code on `master`.
+We develop on the `unstable` branch and practice [trunk-based
+development](https://trunkbaseddevelopment.com/).
 
 Nontrivial changes should start with a [draft pull request][] against
 `unstable`. The draft signals that work is underway. When the work is ready for
@@ -114,13 +136,13 @@ ready for them to take a look.
 Where possible, implementation trajectories should aim to proceed as a series of
 small, logically distinct, incremental changes, in the form of small PRs that
 can be merged quickly. This helps manage the load for reviewers and reduces the
-likelihood that PRs will sit open for longer.
+likelihood of merge conflicts or strategically misdirected work.
 
 Each stage of the process is aimed at creating feedback cycles which align
 contributors and maintainers to make sure:
 
 - Contributors don’t waste their time implementing/proposing features which
-  won’t land in `main`.
+  won’t land in `unstable`.
 - Maintainers have the necessary context in order to support and review
   contributions.
 
@@ -138,6 +160,19 @@ The necessary shell environment is specified in [.envrc](./.envrc). You can:
 - or use it as a reference for what to put in your preferred rc files
 
 [direnv]: https://direnv.net/
+
+#### Compiler warnings
+
+We fail CI builds on compiler warnings.
+
+To have compiler warnings also fail on local builds, set
+
+```sh
+export APALACHE_FATAL_WARNINGS=true
+```
+
+You may add this to your `.local-envrc` file at the root of this repo to have
+`direnv` load this into your development environment.
 
 ## Development Environment
 
@@ -198,6 +233,10 @@ Download the community edition of [IntelliJ
 IDEA](https://www.jetbrains.com/idea/) and set up a new project. If you already
 have IntelliJ installed, please ensure you using version 2021.3.1 or later.
 We've had reports of build failures with earlier versions.
+
+For some tests to succeed, you will have to [set the environment
+variable](https://www.jetbrains.com/help/objc/add-environment-variables-and-program-arguments.html#add-environment-variables)
+`APALACHE_HOME` to the root of the Apalache source tree.
 
 #### Emacs
 
@@ -262,6 +301,14 @@ Run the units
 make test
 ```
 
+### Logging in unit tests
+
+We disable unit test log output for subprojects where necessary, to avoid output
+flooding the console. This affects unit tests only, and is configured in a
+per-subproject logback configuration file `test/resources/logback-test.xml`.
+This file also contains a commented-out console appender that can be enabled if
+needed for debugging purposes.
+
 ### Integration tests
 
 #### Installing Dependencies
@@ -308,27 +355,79 @@ The CI configuration is located in
 
 ### Structure
 
-[./UNRELEASED.md](./UNRELEASED.md)
-: A living record of the changes not yet released.
+[./.unreleased/](./.unreleased/)
+: A living record of the changes not yet released. It contains a subdirectory
+  for each supported category of change.
 
-[./RELEASE-NOTES.md](./RELEASE-NOTES.md)
-: A frozen record documenting the changes added since the last release, only
-  present in release-commits.
+[./RELEASE.md](./RELEASE.md)
+: A frozen record documenting the changes added since the last release. This is
+  only present in release commits.
 
 [./CHANGES.md](./CHANGES.md)
-: The accumulated history of all the changes, across all versions.
+: The changelog accumulating the history of all the changes, across all
+  versions.
 
 ### Recording changes
 
-Every non-trivial PR must update the [unreleased changes log](./UNRELEASED.md).
+Every PR introducing changes that are likely to impact the observable behavior
+of Apalache MUST add at least one entry into the appropriate subdirectory of
+[.unreleased/](./.unreleased/).
 
-Changes for a given release should be split between the five sections:
+#### What kinds of changes to record
 
-1. Breaking Changes
-2. Features
-3. Improvements
-4. Bug Fixes
-5. Documentation
+We break entries into the follow categories:
+
+[breaking-changes](https://en.wiktionary.org/wiki/breaking_change)
+: A breaking change occurs when behavior is introduced that could cause existing
+  usage patterns to fail. Examples include adding/removing CLI flags or changing
+  the representation of data that is emitted as part of our public API.
+
+[features](https://en.wikipedia.org/wiki/Software_feature)
+: Features include adding any user-visible functionality or making significant
+  improvements to existing functionality.
+
+[bug-fixes](https://en.wikipedia.org/wiki/Software_bug)
+: "A software bug is an error, flaw or fault in computer software that causes it
+  to produce an incorrect or unexpected result." We only record the removal of
+  bugs and not their introduction ;)
+
+[documentation](https://en.wikipedia.org/wiki/Documentation)
+: Documentation includes the inline CLI documentation and the user manual.
+
+We generally do not make entries for changes that don't affect the observable
+behavior of the program for users. E.g., we don't add entries for things like
+design documentation, improvements to the development environment, or code
+reorganization that doesn't impact the public API.
+
+#### How to record a change
+
+An single entry is made by creating a single markdown file in the appropriate
+directory. To enter `n` distinct changes, create `n` different markdown files.
+
+As an example, if your PR introduces the new feature `Foo`, you would add a file
+`.unreleased/features/foo.md` with content along the lines of
+
+```markdown
+Added feature Foo, see #123
+```
+
+where `#123` is the ID of the issue or pull request that best explains the
+motive and nature of the change.
+
+The file name is generally irrelevant, but if the order of changelog entries
+matters, you can use the lexicographical ordering of file names in a directory
+to enforce it
+
+The contents of each file will be converted into a single bullet point item in
+the release notes under a heading corresponding to the sub-directory. E.g., the
+above example will be included in the changelog for the next release as:
+
+```markdown
+
+### Features
+
+- Added feature Foo, see #123
+```
 
 ## Releases
 

@@ -1,8 +1,9 @@
 package at.forsyte.apalache.tla.pp.passes
 
+import at.forsyte.apalache.infra.passes.Pass.PassResult
 import at.forsyte.apalache.infra.passes.PassOptions
 import at.forsyte.apalache.tla.lir.{ModuleProperty, TlaModule}
-import at.forsyte.apalache.io.lir.{TlaWriter, TlaWriterFactory}
+import at.forsyte.apalache.io.lir.TlaWriterFactory
 import at.forsyte.apalache.tla.lir.transformations.TransformationTracker
 import at.forsyte.apalache.tla.lir.transformations.standard._
 import at.forsyte.apalache.tla.pp.{Desugarer, UniqueNameGenerator}
@@ -28,7 +29,7 @@ class DesugarerPassImpl @Inject() (
 
   override def name: String = "DesugarerPass"
 
-  override def execute(tlaModule: TlaModule): Option[TlaModule] = {
+  override def execute(tlaModule: TlaModule): PassResult = {
     logger.info("  > Desugaring...")
     val input = tlaModule
     val varNames = input.varDeclarations.map {
@@ -37,8 +38,8 @@ class DesugarerPassImpl @Inject() (
     val output = ModuleByExTransformer(Desugarer(gen, varNames, tracker))(input)
 
     // dump the result of preprocessing
-    writerFactory.writeModuleAllFormats(output.copy(name = "03_OutDesugarer"), TlaWriter.STANDARD_MODULES)
-    Some(output)
+    writeOut(writerFactory, output)
+    Right(output)
   }
 
   override def dependencies = Set(ModuleProperty.TypeChecked)

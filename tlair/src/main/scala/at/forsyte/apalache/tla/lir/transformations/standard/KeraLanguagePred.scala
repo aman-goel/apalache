@@ -126,6 +126,7 @@ object KeraLanguagePred {
         ApalacheOper.expand,
         ApalacheOper.constCard,
         ApalacheOper.setAsFun,
+        ApalacheOper.guess,
         ApalacheInternalOper.apalacheSeqCapacity,
         // for the future
         //    TlaActionOper.enabled,
@@ -153,7 +154,6 @@ object KeraLanguagePred {
         TlaArithOper.ge,
         TlaSetOper.in,
         TlaSetOper.cup,
-        TlaSetOper.subseteq,
         TlaSeqOper.concat,
         ApalacheOper.assign,
         // for the future
@@ -169,7 +169,7 @@ object KeraLanguagePred {
         TlaSetOper.enumSet,
         TlaFunOper.except,
         TlaFunOper.tuple,
-        TlaFunOper.enum,
+        TlaFunOper.rec,
         TlaSeqOper.subseq,
         TlaOper.label,
     ) /////

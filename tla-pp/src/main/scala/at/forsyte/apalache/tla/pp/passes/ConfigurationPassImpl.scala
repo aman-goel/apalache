@@ -1,20 +1,22 @@
 package at.forsyte.apalache.tla.pp.passes
 
+import at.forsyte.apalache.infra.passes.Pass.PassResult
 import at.forsyte.apalache.infra.passes.{PassOptions, WriteablePassOptions}
 import at.forsyte.apalache.io.ConfigurationError
+import at.forsyte.apalache.io.lir.TlaWriterFactory
 import at.forsyte.apalache.io.tlc.TlcConfigParserApalache
 import at.forsyte.apalache.io.tlc.config._
 import at.forsyte.apalache.tla.lir.UntypedPredefs._
 import at.forsyte.apalache.tla.lir._
-import at.forsyte.apalache.io.lir.{TlaWriter, TlaWriterFactory}
 import at.forsyte.apalache.tla.lir.oper.{TlaActionOper, TlaBoolOper, TlaOper, TlaTempOper}
-import at.forsyte.apalache.tla.lir.transformations.TransformationTracker
+import at.forsyte.apalache.tla.lir.transformations.standard.NonrecursiveLanguagePred
+import at.forsyte.apalache.tla.lir.transformations.{LanguageWatchdog, TransformationTracker}
 import at.forsyte.apalache.tla.pp._
 import com.google.inject.Inject
 import com.typesafe.scalalogging.LazyLogging
 import org.apache.commons.io.FilenameUtils
 
-import java.io.{FileNotFoundException, FileReader}
+import java.io.{File, FileReader, IOException}
 
 /**
  * The pass that collects the configuration parameters and overrides constants and definitions. This pass also overrides
@@ -35,14 +37,24 @@ class ConfigurationPassImpl @Inject() (
 
   override def name: String = "ConfigurationPass"
 
-  override def execute(tlaModule: TlaModule): Option[TlaModule] = {
+  override def execute(tlaModule: TlaModule): PassResult = {
+    // Since this is the 1st pass after Inline, check absence of recursion first
+    LanguageWatchdog(NonrecursiveLanguagePred).check(tlaModule)
+
     // this pass is hard to read, too many things are happening here...
     val relevantOptions = new WriteablePassOptions()
     copyRelevantOptions(options, relevantOptions)
     // try to read from the TLC configuration file and produce constant overrides
     val overrides = loadOptionsFromTlcConfig(tlaModule, relevantOptions)
-    val currentAndOverrides =
-      new TlaModule(tlaModule.name, tlaModule.declarations ++ overrides)
+
+    val constOverrideNames = tlaModule.constDeclarations.map(_.name).map(ConstAndDefRewriter.OVERRIDE_PREFIX + _).toSet
+    val (constOverrides, otherOverrides) = overrides.partition(d => constOverrideNames.contains(d.name))
+
+    val newDecls =
+      if (constOverrides.nonEmpty) extendCinitWithOverrides(constOverrides, tlaModule)
+      else tlaModule.declarations
+
+    val currentAndOverrides = TlaModule(tlaModule.name, newDecls ++ otherOverrides)
     setFallbackOptions(relevantOptions)
 
     // make sure that the required operators are defined
@@ -57,9 +69,39 @@ class ConfigurationPassImpl @Inject() (
     // However, that should be done very carefully. Maybe we should do that in the future.
 
     // dump the configuration result
-    writerFactory.writeModuleAllFormats(configuredModule.copy(name = "02_OutConfig"), TlaWriter.STANDARD_MODULES)
+    writeOut(writerFactory, configuredModule)
 
-    Some(configuredModule)
+    Right(configuredModule)
+  }
+
+  // Returns new declarations, where CInit has been extended (or constructed)
+  // with OVERRIDEs relating to specification constants
+  private def extendCinitWithOverrides(constOverrides: Seq[TlaDecl], tlaModule: TlaModule): Seq[TlaDecl] = {
+    // We build a ConstInit from the overrides and proceed as usual
+    val cinitName = options.getOrElse[String]("checker", "cinit", "CInit")
+    options.set("checker.cinit", cinitName) // in case it wasn't defined at all
+    val oldCinitOpt = tlaModule.operDeclarations
+      .find {
+        _.name == cinitName
+      }
+
+    val boolTag = Typed(BoolT1)
+    val overridesAsEql = constOverrides.collect { case TlaOperDecl(name, _, body) =>
+      val varName = name.drop(ConstAndDefRewriter.OVERRIDE_PREFIX.length)
+      OperEx(TlaOper.eq, NameEx(varName)(body.typeTag), body)(boolTag)
+    }
+
+    val newCinitDecl = oldCinitOpt
+      .map { d =>
+        d.copy(body = OperEx(TlaBoolOper.and, d.body +: overridesAsEql: _*)(boolTag))
+      }
+      .getOrElse {
+        TlaOperDecl(cinitName, List.empty, OperEx(TlaBoolOper.and, overridesAsEql: _*)(boolTag))(Typed(OperT1(Seq.empty,
+                    BoolT1)))
+      }
+
+    // Since declarations are a Seq not a Set, we may need to remove the old CInit first
+    tlaModule.declarations.filterNot(_.name == cinitName) :+ newCinitDecl
   }
 
   // if checker.init and checker.next are not set, set them to Init and Next, respectively
@@ -87,7 +129,9 @@ class ConfigurationPassImpl @Inject() (
   }
 
   /**
-   * Produce the configuration options from a TLC config, if it is present.
+   * Produce the configuration options from a TLC config, if a filename was passed in the options. Warn the user if
+   * there is a config file of a similar name that was not passed. Throw an error if the filename was passed in the
+   * options, but the file does not exist.
    *
    * @param module
    *   the input module
@@ -100,17 +144,28 @@ class ConfigurationPassImpl @Inject() (
       module: TlaModule,
       outOptions: WriteablePassOptions): Seq[TlaDecl] = {
     var configuredModule = module
-    // read TLC config if present
+    // read a TLC config if it was passed by the user
     val configFilename = options.getOrElse[String]("checker", "config", "")
-    val filename =
-      if (configFilename.isEmpty) {
-        options
-          .getOrError[String]("parser", "filename")
-          .replaceFirst("\\.(tla|json)$", "\\.cfg")
-      } else {
-        configFilename
+    if (configFilename.isEmpty) {
+      // The older versions of apalache were loading a TLC config file of the same basename as the spec.
+      // We have flipped this behavior in version 0.25.0.
+      // Hence, warn the user that their config is not loaded by default.
+      val stem = FilenameUtils.removeExtension(options.getOrError[String]("parser", "filename"))
+      val defaultConfig = new File(stem + ".cfg")
+      if (defaultConfig.exists()) {
+        val msg = s"  > TLC config file found in specification directory. To enable it, pass --config=$defaultConfig."
+        logger.info(msg)
       }
-    val basename = FilenameUtils.getName(filename)
+      // return immediately, with no additional declarations
+      return List()
+    }
+
+    if (!new File(configFilename).exists()) {
+      // if the file does not exist, report immediately, without going into the complex code below
+      throw new TLCConfigurationError("TLC config file not found: " + configFilename)
+    }
+
+    val basename = FilenameUtils.getName(configFilename)
     logger.info(s"  > $basename: Loading TLC configuration")
 
     def setInit(init: String): Unit = {
@@ -142,7 +197,7 @@ class ConfigurationPassImpl @Inject() (
     }
 
     try {
-      val config = TlcConfigParserApalache.apply(new FileReader(filename))
+      val config = TlcConfigParserApalache(new FileReader(configFilename))
       configuredModule = new TlcConfigImporter(config)(module)
       config.behaviorSpec match {
         case InitNextSpec(init, next) =>
@@ -159,12 +214,8 @@ class ConfigurationPassImpl @Inject() (
           () // do nothing
       }
       if (config.invariants.nonEmpty) {
-        logger.info(
-            s"  > $basename: found INVARIANTS: " + String.join(
-                ", ",
-                config.invariants: _*
-            )
-        )
+        val msg = s"  > $basename: found INVARIANTS: " + String.join(", ", config.invariants: _*)
+        logger.info(msg)
 
         outOptions.get[List[String]]("checker", "inv") match {
           case None =>
@@ -172,12 +223,8 @@ class ConfigurationPassImpl @Inject() (
 
           case Some(cmdInvariants) =>
             val cmdInvariantsStr = cmdInvariants.map(s => "--inv " + s)
-            logger.warn(
-                s"  > Overriding with command line arguments: " + String.join(
-                    " ",
-                    cmdInvariantsStr: _*
-                )
-            )
+            val msg = s"  > Overriding with command line arguments: " + String.join(" ", cmdInvariantsStr: _*)
+            logger.warn(msg)
             outOptions.set("checker.inv", cmdInvariants)
         }
       }
@@ -186,9 +233,7 @@ class ConfigurationPassImpl @Inject() (
         // set the temporal properties, but warn the user that they are not used
         outOptions.set("checker.temporalProps", config.temporalProps)
         for (prop <- config.temporalProps) {
-          logger.warn(
-              s"  > $basename: PROPERTY $prop is ignored. Only INVARIANTS are supported."
-          )
+          logger.warn(s"  > $basename: PROPERTY $prop is ignored. Only INVARIANTS are supported.")
         }
       }
 
@@ -197,20 +242,13 @@ class ConfigurationPassImpl @Inject() (
           .map(ConstAndDefRewriter.OVERRIDE_PREFIX + _)
       configuredModule.declarations.filter(d => namesOfOverrides.contains(d.name))
     } catch {
-      case _: FileNotFoundException =>
-        if (configFilename.isEmpty) {
-          logger.info("  > No TLC configuration found. Skipping.")
-          List()
-        } else {
-          throw new TLCConfigurationError(
-              s"  > $basename: TLC config is provided with --config, but not found"
-          )
-        }
+      case e: IOException =>
+        val msg = s"  > $basename: IO error when loading the TLC config: ${e.getMessage}"
+        throw new TLCConfigurationError(msg)
 
       case e: TlcConfigParseError =>
-        throw new TLCConfigurationError(
-            s"  > $basename:${e.pos}:  Error parsing the TLC config file: " + e.msg
-        )
+        val msg = s"  > $basename:${e.pos}:  Error parsing the TLC config file: ${e.msg}"
+        throw new TLCConfigurationError(msg)
     }
   }
 

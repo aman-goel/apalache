@@ -1,6 +1,144 @@
-<!-- NOTE:
-     This file is generated. Do not write release notes here.
-     Notes for unreleased changes go in ./UNRELEASED.md -->
+<!-- NOTE: This file is generated. Do not write release notes here.
+ Notes for unreleased changes go in the .unreleased/ directory. -->
+ 
+## 0.25.7 - 2022-06-13
+
+### Features
+
+- Add support for variants in the typechecker, see #1847
+
+## 0.25.6 - 2022-06-06
+
+### Features
+
+- Always output an example trace, add `--save-runs` flag to save examples for each run of `simulate`, see #1838
+
+### Bug fixes
+
+- Output rare expressions as unserializable to ITF, see #1841
+- Fix a problem in comparing functions with empty domains in the arrays encoding, see #1811
+- Fix spurious counter-example generation with functions of records in the arrays encoding, see #1840
+
+## 0.25.5 - 2022-05-30
+
+### Features
+
+- Add the experimental command `simulate` that randomly picks transitions, see #1809
+
+## 0.25.4 - 2022-05-30
+
+### Bug fixes
+
+- Fix nested set membership in the arrays encoding, see #1819
+- Fixed bug in inlining ASSUME statements, see #1794
+
+## 0.25.3 - 2022-05-20
+
+### Breaking changes
+
+- Introduce dedicated exit codes for type-checking errors, parser errors, and evaluation errors (e.g., due to unsupported language constructs or operators), see #1749
+
+### Features
+
+- Support sound records (over rows) in the model checker, see #1717
+
+### Bug fixes
+
+- Fix potential non-determinism when picking from `[S -> T]`, see #1753
+- Fix the bug in uninterpreted types, see #1792
+
+## 0.25.2
+
+### Features
+
+ * Support sound records (over rows) in the model checker, see #1717
+
+## 0.25.1
+     
+### Features
+
+ * Support for native ARM64/AArch64 JVMs (and thus Apple Silicon), see #751
+
+### Bug fixes
+
+ * Fix usage of sets of function sets in the arrays encoding, see #1680
+ * Fix an uncaught exception when setting up the output manager, see #1706
+ * Handle heap memory exhaustion gracefully, see #1711
+
+## 0.25.0
+
+### Breaking changes
+
+ * Recommended JDK version was bumped to JDK17, see #1662
+ * Add the option `--features` to enable experimental features, see #1648
+ * Never report a deadlock when `--no-deadlock=1`, see #1679
+
+### Features
+
+* Include the version number in `detailed.log`, see #1678
+* Add the option `--features` to enable experimental features, see #1648
+* Never load TLC config files by default, see #1676
+* Experimental type unification over rows, new records, and variants, see #1646
+* Experimental type checking for records over rows, see #1688
+
+### Bug fixes
+
+* Fix references to `--tune-here` (actually `--tuning-options`), see #1579
+* Not failing when assignment and `UNCHANGED` appear in invariants, see #1664
+
+## 0.24.1
+
+### Breaking changes
+
+ * Rename `--tuning` to `--tuning-options-file`, see #1579
+
+### Bug fixes
+
+ * Fix references to `--tune-here` (actually `--tuning-options`), see #1579
+
+## 0.24.0
+
+### Breaking changes
+* `RECURSIVE` operators and functions are no longer supported, see #1569
+* rename Apalache `FoldSet` and `FoldSeq` to `ApaFoldSet` and `ApaFoldSeqLeft`, see #1617
+
+### Features
+
+* Add the operator `Apalache!Guess`, see #1590 and #888
+* Extend the type parser to support ADR014 (experimental), see #1602
+* Keramelizer now rewrites \subseteq using forall quantification, see #1408
+* Builtin operators can be passed as arguments to HO operators, see #1630
+* Optimize set membership for record sets, see #1629
+## 0.23.1
+
+### Bug fixes
+
+* Fix the generation of SMT instances with the `--debug` flag, see #1594
+* Fix symbolic link generation in 'make' on Windows, see #1596
+
+## 0.23.0
+
+### Breaking changes
+
+ * Rework module lookup (drops support for `TLA_PATH`), see #1491
+
+### Features
+
+ * Look up modules in the same directory, see #1491
+ * Support for the community module `SequencesExt`, see  #1539
+ * Support for the community module `BagsExt`, see #1555
+ * Support for the community module `Folds`, see #1558
+
+### Improvements
+
+ * Pack arithmetic expressions and comparisons into a single SMT constraint,
+   see #1540 and #1545
+
+### Bug fixes
+
+ * Fix uncaught `FileNotFoundException` in commands called on nonexistent files,
+   see #1503
+ * Fix equality on sequences, see #1548, #1554
 
 ## 0.22.3
 
@@ -746,13 +884,13 @@
 
  * speed up by using constants instead of uninterpreted functions
 
- * options for fine tuning with `--fine-tuning`, see [tuning](https://github.com/informalsystems/apalache/blob/unstable/docs/tuning.md)
+ * options for fine tuning with `--fine-tuning`, see [tuning](https://github.com/informalsystems/apalache/blob/unstable/docs/src/apalache/tuning.md)
 
  * bugfix in logback configuration
 
 ## 0.4.0-pre1
 
- * type annotations and very simple type inference, see the [notes](https://github.com/informalsystems/apalache/blob/unstable/docs/types-and-annotations.md)
+ * type annotations and very simple type inference, see the [notes](https://github.com/informalsystems/apalache/blob/unstable/docs/src/apalache/types-and-annotations.md)
 
  * a dramatic speed up of many operators by using a `QF_NIA` theory and cherry pick
 

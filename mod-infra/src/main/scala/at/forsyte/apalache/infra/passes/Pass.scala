@@ -1,5 +1,7 @@
 package at.forsyte.apalache.infra.passes
 
+import at.forsyte.apalache.infra.ExitCodes.TExitCode
+import at.forsyte.apalache.infra.passes.Pass.PassResult
 import at.forsyte.apalache.tla.lir.{ModuleProperty, TlaModule}
 
 /**
@@ -25,6 +27,19 @@ trait Pass {
    */
   def name: String
 
+  var passNumber: Int = 0
+
+  /**
+   * Updates the pass number internally
+   *
+   * @return
+   *   This pass, with an updated pass number
+   */
+  def withNumber(i: Int): Pass = {
+    passNumber = i
+    this
+  }
+
   /**
    * Run the pass.
    * @param module
@@ -33,7 +48,7 @@ trait Pass {
    * @return
    *   the transformed module, if the pass was successful
    */
-  def execute(module: TlaModule): Option[TlaModule]
+  def execute(module: TlaModule): PassResult
 
   /**
    * List the dependencies of the pass. These are properties the module has to have in order to be processed by the
@@ -54,4 +69,8 @@ trait Pass {
    */
   def transformations: Set[ModuleProperty.Value]
 
+}
+
+object Pass {
+  type PassResult = Either[TExitCode, TlaModule]
 }

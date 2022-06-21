@@ -2,22 +2,17 @@ package at.forsyte.apalache.tla
 
 // Generated from the build.sbt file by the buildInfo plugin
 import apalache.BuildInfo
-
-import java.io.{File, FileNotFoundException}
-import java.time.LocalDateTime
-import java.time.temporal.ChronoUnit
+import at.forsyte.apalache.infra._
 import at.forsyte.apalache.infra.log.LogbackConfigurator
-import at.forsyte.apalache.infra.passes.{Pass, PassChainExecutor, ToolModule, WriteablePassOptions}
-import at.forsyte.apalache.tla.lir.TlaModule
-import at.forsyte.apalache.infra.{ExceptionAdapter, FailureMessage, NormalErrorMessage, PassOptionException}
-import at.forsyte.apalache.io.{OutputManager, ReportGenerator}
+import at.forsyte.apalache.infra.passes.{PassChainExecutor, ToolModule, WriteablePassOptions}
+import at.forsyte.apalache.io.{ConfigManager, ConfigurationError, OutputManager, ReportGenerator}
 import at.forsyte.apalache.tla.bmcmt.config.{CheckerModule, ReTLAToVMTModule}
+import at.forsyte.apalache.tla.bmcmt.rules.vmt.TlaExToVMTWriter
 import at.forsyte.apalache.tla.imp.passes.ParserModule
-import at.forsyte.apalache.tla.tooling.ExitCodes
-import at.forsyte.apalache.tla.tooling.opt.{
-  AbstractCheckerCmd, CheckCmd, ConfigCmd, General, ParseCmd, ServerCmd, TestCmd, TranspileCmd, TypeCheckCmd,
-}
+import at.forsyte.apalache.tla.lir.TlaModule
+import at.forsyte.apalache.tla.tooling.opt._
 import at.forsyte.apalache.tla.typecheck.passes.TypeCheckerModule
+import at.forsyte.apalache.shai
 import com.google.inject.{Guice, Injector}
 import com.typesafe.scalalogging.LazyLogging
 import org.apache.commons.configuration2.builder.fluent.Configurations
@@ -26,11 +21,11 @@ import org.backuity.clist.Cli
 import util.ExecutionStatisticsCollector
 import util.ExecutionStatisticsCollector.Selection
 
-import scala.collection.JavaConverters._
+import java.io.{File, FileNotFoundException}
+import java.time.LocalDateTime
+import java.time.temporal.ChronoUnit
+import scala.jdk.CollectionConverters._
 import scala.util.Random
-import at.forsyte.apalache.io.ApalacheConfig
-import at.forsyte.apalache.io.ConfigManager
-import at.forsyte.apalache.tla.bmcmt.rules.vmt.TlaExToVMTWriter
 
 /**
  * Command line access to the APALACHE tools.
@@ -40,33 +35,52 @@ import at.forsyte.apalache.tla.bmcmt.rules.vmt.TlaExToVMTWriter
  */
 object Tool extends LazyLogging {
   lazy val ISSUES_LINK: String = "[https://github.com/informalsystems/apalache/issues]"
-  lazy val ERROR_EXIT_CODE = 99
-  lazy val OK_EXIT_CODE = 0
 
   /**
-   * Run the tool in the standalone mode with the provided arguments. This method calls System.exit with the computed
-   * exit code. If you like to call the tool without System.exit, use the the Tool#run.
+   * Run the tool in the standalone mode with the provided arguments. This method calls [[System.exit]] with the
+   * computed exit code. To call the tool without System.exit, use [[run]].
    *
    * @param args
    *   the command line arguments
    */
   def main(args: Array[String]): Unit = {
-    System.exit(run(args))
+    try {
+      System.exit(run(args))
+    } catch {
+      case _: OutOfMemoryError =>
+        // We usually catch this in `handleExceptions` below.
+        // If it is caught here, logging has not been set up yet, so print directly to `Console.err`.
+        Console.err.println(s"Error: Ran out of heap memory (max JVM memory: ${Runtime.getRuntime.maxMemory})")
+        Console.err.println(s"To increase available heap memory, see the manual:")
+        Console.err.println("  [https://apalache.informal.systems/docs/apalache/running.html#supplying-jvm-arguments]")
+        Console.out.println(s"EXITCODE: ERROR (${ExitCodes.ERROR})")
+        System.exit(ExitCodes.ERROR)
+    }
   }
 
-  private def outputAndLogConfig(cmd: General, cfg: ApalacheConfig): Unit = {
-    OutputManager.configure(cfg)
-    if (cmd.file.getName.endsWith(".tla")) {
-      OutputManager.initSourceLines(cmd.file)
+  // Returns `Left(errmsg)` in case of configuration errors
+  private def outputAndLogConfig(cmd: General): Either[String, Unit] = {
+    ConfigManager(cmd).map { cfg =>
+      try {
+        OutputManager.configure(cfg)
+      } catch {
+        case e: ConfigurationError => return Left(e.getMessage)
+      }
+      // We currently use dummy files for some commands, so we skip here on non-existing files
+      if (cmd.file.getName.endsWith(".tla") && cmd.file.exists()) {
+        OutputManager.initSourceLines(cmd.file)
+      }
+      println(s"Output directory: ${OutputManager.runDir.normalize()}")
+      OutputManager.withWriterInRunDir(OutputManager.Names.RunFile)(
+          _.println(s"${cmd.env} ${cmd.label} ${cmd.invocation}")
+      )
+      // force our programmatic logback configuration, as the autoconfiguration works unpredictably
+      new LogbackConfigurator(OutputManager.runDirPathOpt, OutputManager.customRunDirPathOpt).configureDefaultContext()
+      // TODO: update workers when the multicore branch is integrated
+      logger.info(s"# APALACHE version: ${BuildInfo.version} | build: ${BuildInfo.build}")
+
+      submitStatisticsIfEnabled(Map("tool" -> "apalache", "mode" -> cmd.label, "workers" -> "1"))
     }
-    println(s"Output directory: ${OutputManager.runDir.normalize()}")
-    OutputManager.withWriterInRunDir(OutputManager.Names.RunFile)(
-        _.println(s"${cmd.env} ${cmd.label} ${cmd.invocation}")
-    )
-    // force our programmatic logback configuration, as the autoconfiguration works unpredictably
-    new LogbackConfigurator(OutputManager.runDirPathOpt, OutputManager.customRunDirPathOpt).configureDefaultContext()
-    // TODO: update workers when the multicore branch is integrated
-    submitStatisticsIfEnabled(Map("tool" -> "apalache", "mode" -> cmd.label, "workers" -> "1"))
   }
 
   /**
@@ -86,6 +100,7 @@ object Tool extends LazyLogging {
       .withCommands(
           new ParseCmd,
           new CheckCmd,
+          new SimulateCmd,
           new TypeCheckCmd,
           new TestCmd,
           new ConfigCmd,
@@ -95,45 +110,53 @@ object Tool extends LazyLogging {
 
     cli match {
       // A standard option, e.g., --version or --help. No header, no timer, no noise
-      case None => OK_EXIT_CODE
+      case None => ExitCodes.OK
+      // One of our commands.
       case Some(cmd) => {
 
-        printHeaderAndStatsConfig()
+        printStatsConfig()
 
-        // One of our commands. Print the header and measure time
-        val startTime = LocalDateTime.now()
-
-        outputAndLogConfig(cmd, ConfigManager(cmd))
-
-        val exitcode =
-          try {
-            cmd match {
-              case parse: ParseCmd =>
-                runForModule(runParse, new ParserModule, parse)
-
-              case check: CheckCmd =>
-                runForModule(runCheck, new CheckerModule, check)
-
-              case test: TestCmd =>
-                runForModule(runTest, new CheckerModule, test)
-
-              case typecheck: TypeCheckCmd =>
-                runForModule(runTypeCheck, new TypeCheckerModule, typecheck)
-
-              case server: ServerCmd =>
-                runForModule(runServer, new CheckerModule, server)
-
-              case constrain: TranspileCmd =>
-                runForModule(runConstrain, new ReTLAToVMTModule, constrain)
-
-              case config: ConfigCmd =>
-                configure(config)
-            }
-          } finally {
-            printTimeDiff(startTime)
+        val exitcode = outputAndLogConfig(cmd) match {
+          case Left(configurationErrorMessage) => {
+            logger.error(s"Configuration error: ${configurationErrorMessage}")
+            ExitCodes.ERROR
           }
+          case Right(()) => {
+            val startTime = LocalDateTime.now()
+            try {
+              cmd match {
+                case parse: ParseCmd =>
+                  runForModule(runParse, new ParserModule, parse)
 
-        if (exitcode == OK_EXIT_CODE) {
+                case simulate: SimulateCmd =>
+                  // simulation is just a special case of checking, which has additional parameters passed via SimulateCmd
+                  runForModule(runCheck, new CheckerModule, simulate)
+
+                case check: CheckCmd =>
+                  runForModule(runCheck, new CheckerModule, check)
+
+                case test: TestCmd =>
+                  runForModule(runTest, new CheckerModule, test)
+
+                case typecheck: TypeCheckCmd =>
+                  runForModule(runTypeCheck, new TypeCheckerModule, typecheck)
+
+                case server: ServerCmd =>
+                  runForModule(runServer, new CheckerModule, server)
+
+                case constrain: TranspileCmd =>
+                  runForModule(runConstrain, new ReTLAToVMTModule, constrain)
+
+                case config: ConfigCmd =>
+                  configure(config)
+              }
+            } finally {
+              printTimeDiff(startTime)
+            }
+          }
+        }
+
+        if (exitcode == ExitCodes.OK) {
           Console.out.println("EXITCODE: OK")
         } else {
           Console.out.println(s"EXITCODE: ERROR ($exitcode)")
@@ -157,6 +180,8 @@ object Tool extends LazyLogging {
   private def setCommonOptions(cli: General, options: WriteablePassOptions): Unit = {
     options.set("general.debug", cli.debug)
     options.set("smt.prof", cli.smtprof)
+    options.set("general.features", cli.features)
+
     // TODO: Remove pass option, and just rely on OutputManager config
     options.set("io.outdir", OutputManager.outDir)
   }
@@ -164,15 +189,15 @@ object Tool extends LazyLogging {
   private def runAndExit(
       executor: PassChainExecutor,
       msgIfOk: TlaModule => String,
-      msgIfFail: String,
-      errCode: Int = ExitCodes.ERROR): Int = {
+      msgIfFail: String): ExitCodes.TExitCode = {
     val result = executor.run()
-    if (result.isDefined) {
-      logger.info(msgIfOk(result.get))
-      ExitCodes.NO_ERROR
-    } else {
-      logger.info(msgIfFail)
-      errCode
+    result match {
+      case Left(errorCode) =>
+        logger.info(msgIfFail)
+        errorCode
+      case Right(module) =>
+        logger.info(msgIfOk(module))
+        ExitCodes.OK
     }
   }
 
@@ -221,8 +246,18 @@ object Tool extends LazyLogging {
     setCoreOptions(executor, check)
 
     var tuning =
-      if (check.tuning != "") loadProperties(check.tuning) else Map[String, String]()
+      if (check.tuningOptionsFile != "") loadProperties(check.tuningOptionsFile) else Map[String, String]()
     tuning = overrideProperties(tuning, check.tuningOptions)
+
+    check match {
+      case sim: SimulateCmd =>
+        // propagate the simulator options to the tuning options, so the model checker can easily pick them
+        tuning += "search.simulation" -> "true"
+        tuning += "search.simulation.maxRun" -> sim.maxRun.toString
+        tuning += "search.simulation.saveRuns" -> sim.saveRuns.toString
+
+      case _ => ()
+    }
     logger.info("Tuning: " + tuning.toList.map { case (k, v) => s"$k=$v" }.mkString(":"))
 
     executor.options.set("general.tuning", tuning)
@@ -245,7 +280,6 @@ object Tool extends LazyLogging {
         executor,
         _ => "Checker reports no error up to computation length " + check.length,
         "Checker has found an error",
-        ExitCodes.ERROR_COUNTEREXAMPLE,
     )
   }
 
@@ -287,8 +321,7 @@ object Tool extends LazyLogging {
     runAndExit(
         executor,
         _ => "No example found",
-        "Checker has found an example. Check counterexample.tla.",
-        ExitCodes.ERROR_COUNTEREXAMPLE,
+        "Found a violation of the postcondition. Check violation.tla.",
     )
   }
 
@@ -313,13 +346,14 @@ object Tool extends LazyLogging {
   }
 
   private def runServer(executor: PassChainExecutor, server: ServerCmd): Int = {
-    logger.info("Running server...")
+    logger.info("Starting server...")
 
     // NOTE Must go after all other options are set due to side-effecting
-    // behavior of current OutmputManager configuration
+    // behavior of current OutputManager configuration
     setCommonOptions(server, executor.options)
-    logger.info("Server mode is not yet implemented!")
-    ExitCodes.ERROR
+
+    shai.v1.RpcServer.main(Array())
+    ExitCodes.OK
   }
 
   private def runConstrain(executor: PassChainExecutor, constrain: TranspileCmd): Int = {
@@ -367,7 +401,7 @@ object Tool extends LazyLogging {
     def parseKeyValue(text: String): (String, String) = {
       val parts = text.split('=')
       if (parts.length != 2 || parts.head.trim == "" || parts(1) == "") {
-        throw new PassOptionException(s"Expected key=value in --tune-here=$propsAsString")
+        throw new PassOptionException(s"Expected key=value in --tuning-options=$propsAsString")
       } else {
         // trim to remove surrounding whitespace from the key, but allow the value to have white spaces
         (parts.head.trim, parts(1))
@@ -387,7 +421,9 @@ object Tool extends LazyLogging {
 
   private def runForModule[C <: General](runner: (PassChainExecutor, C) => Int, module: ToolModule, cmd: C): Int = {
     val injector = Guice.createInjector(module)
-    val passes = module.passes.map { p => injector.getInstance(p).asInstanceOf[Pass] }
+    val passes = module.passes.zipWithIndex.map { case (p, i) =>
+      injector.getInstance(p).withNumber(i)
+    }
     val options = injector.getInstance(classOf[WriteablePassOptions])
     val executor = new PassChainExecutor(options, passes)
 
@@ -403,7 +439,7 @@ object Tool extends LazyLogging {
     try {
       runner(executor, cmd)
     } catch {
-      case e: Exception if adapter.toMessage.isDefinedAt(e) =>
+      case e: Throwable if adapter.toMessage.isDefinedAt(e) =>
         adapter.toMessage(e) match {
           case NormalErrorMessage(text) =>
             logger.error(text)
@@ -432,21 +468,16 @@ object Tool extends LazyLogging {
     }
   }
 
-  private def printHeaderAndStatsConfig(): Unit = {
-    Console.println(s"""# APALACHE
-                       |# version: ${BuildInfo.version}
-                       |# build  : ${BuildInfo.build}
-                       |#""".stripMargin)
-
-    if (ExecutionStatisticsCollector.promptUser()) {
+  private def printStatsConfig(): Unit = {
+    if (new ExecutionStatisticsCollector().isEnabled) {
+      // Statistic collection is enabled. Thank the user
+      Console.println("# Usage statistics is ON. Thank you!")
+      Console.println("# If you have changed your mind, disable the statistics with config --enable-stats=false.")
+    } else {
       // Statistics collection is not enabled. Cry for help.
       Console.println("# Usage statistics is OFF. We care about your privacy.")
       Console.println(
           "# If you want to help our project, consider enabling statistics with config --enable-stats=true.")
-    } else {
-      // Statistic collection is enabled. Thank the user
-      Console.println("# Usage statistics is ON. Thank you!")
-      Console.println("# If you have changed your mind, disable the statistics with config --enable-stats=false.")
     }
     Console.println("")
   }
@@ -483,7 +514,7 @@ object Tool extends LazyLogging {
         ()
     }
 
-    ExitCodes.NO_ERROR
+    ExitCodes.OK
   }
 
   private def configDirExistsOrCreated(): Boolean = {

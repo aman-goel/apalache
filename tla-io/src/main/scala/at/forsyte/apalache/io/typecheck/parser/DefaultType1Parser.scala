@@ -70,18 +70,21 @@ object DefaultType1Parser extends Parsers with Type1Parser {
   }
 
   private def typeExpr: Parser[TlaType1] = {
-    (operator | function | noFunExpr)
+    operator | function | noFunExpr
   }
 
   // A type expression. We wrap it with a list, as (type, ..., type) may start an operator type
   private def noFunExpr: Parser[TlaType1] = {
-    (INT() | REAL() | BOOL() | STR() | typeVar | typeConst
-      | set | seq | tuple | sparseTuple
-      | record | parenExpr) ^^ {
-      case INT()        => IntT1()
-      case REAL()       => RealT1()
-      case BOOL()       => BoolT1()
-      case STR()        => StrT1()
+    (INT() | REAL() | BOOL() | STR()
+      | set | seq | tuple | row | sparseTuple
+      | record | recordFromRow
+      | variant | variantVar
+      | typeVar | typeConst
+      | parenExpr) ^^ {
+      case INT()        => IntT1
+      case REAL()       => RealT1
+      case BOOL()       => BoolT1
+      case STR()        => StrT1
       case tt: TlaType1 => tt
     }
   }
@@ -137,9 +140,21 @@ object DefaultType1Parser extends Parsers with Type1Parser {
     }
   }
 
-  // a sparse tuple type like {3: Int, 5: Bool}
+  // a row type like (| field1: type1 | field2: type2 |) or (| field1: type1 | field2: type2 | c |)
+  private def row: Parser[TlaType1] = {
+    LROW() ~ repsep(typedField, PIPE()) ~ opt(PIPE() ~ typeVar) ~ RROW() ^^ {
+      case _ ~ list ~ Some(_ ~ VarT1(v)) ~ _ =>
+        RowT1(VarT1(v), list: _*)
+
+      case _ ~ list ~ None ~ _ =>
+        RowT1(list: _*)
+    } | // the degenerate case of (| var |)
+      LROW() ~> typeVar <~ RROW() ^^ { v => RowT1(v) }
+  }
+
+  // a sparse tuple type like <| 3: Int, 5: Bool |>
   private def sparseTuple: Parser[TlaType1] = {
-    LCURLY() ~ repsep(typedFieldNo, COMMA()) ~ RCURLY() ^^ { case _ ~ list ~ _ =>
+    LTUPLE_ROW() ~ repsep(typedFieldNo, COMMA()) ~ RTUPLE_ROW() ^^ { case _ ~ list ~ _ =>
       SparseTupT1(SortedMap(list: _*))
     }
   }
@@ -166,6 +181,77 @@ object DefaultType1Parser extends Parsers with Type1Parser {
     }
   }
 
+  private def findDups(list: List[String]): Option[String] = {
+    // we could use list.groupBy(identity) to count the number of occurrences,
+    // but that would introduce an unnecessary map
+    list.zipWithIndex.foldLeft(None: Option[String]) { case (found, (key, i)) =>
+      if (found.isEmpty && list.zipWithIndex.exists(p => p._1 == key && p._2 != i)) {
+        Some(key)
+      } else {
+        found
+      }
+    }
+  }
+
+  // a record type that is constructed from a row like { f1: Int, f2: Bool } or { f1: Int, f2: Bool, c }
+  private def recordFromRow: Parser[TlaType1] = {
+    // the first rule tests for duplicates in the rule names
+    (LCURLY() ~> repsep(typedField, COMMA()) <~ opt(COMMA() ~ typeVar) <~ RCURLY()) >> { list =>
+      val dup = findDups(list.map(_._1))
+      if (dup.nonEmpty) {
+        err(s"Found a duplicate key ${dup.get} in a record")
+      } else {
+        // fail here to try the second rule
+        failure("")
+      }
+    } | // the second rule is actually producing the result, provided that the sequence is accepted
+      (LCURLY() ~> repsep(typedField, COMMA()) ~ opt(COMMA() ~ typeVar) <~ RCURLY()) ^^ {
+        case list ~ Some(_ ~ VarT1(v)) =>
+          RecRowT1(RowT1(VarT1(v), list: _*))
+
+        case list ~ None =>
+          RecRowT1(RowT1(list: _*))
+      } | // the degenerate case of a single variable
+      (LCURLY() ~> typeVar <~ RCURLY()) ^^ (v => RecRowT1(RowT1(v)))
+  }
+
+  // An option in the variant type that is constructed from a row.
+  // For example, Tag1(a).
+  private def variantOption: Parser[(String, TlaType1)] = {
+    ((tag <~ LPAREN()) ~ typeExpr <~ RPAREN()) ^^ { case IDENT(tagName) ~ valueType =>
+      (tagName, valueType)
+    }
+  }
+
+  // The user-friendly syntax of the variant type.
+  // For example: Tag1(a) | Tag2(Int) | c.
+  private def variant: Parser[TlaType1] = {
+    // the first rule tests for duplicates in the tags
+    rep1sep(variantOption, PIPE()) <~ opt(PIPE() ~ typeVar) >> { list =>
+      val dup = findDups(list.map(_._1))
+      if (dup.nonEmpty) {
+        err(s"Found a duplicate tag ${dup.get} in a variant")
+      } else {
+        // fail here to try the second rule
+        failure("")
+      }
+    } | // the second rule is actually producing the result, provided that the sequence is accepted
+      (rep1sep(variantOption, PIPE()) ~ opt(PIPE() ~> typeVar)) ^^ {
+        case list ~ Some(VarT1(v)) =>
+          VariantT1(RowT1(VarT1(v), list: _*))
+
+        case list ~ None =>
+          VariantT1(RowT1(list: _*))
+      }
+  }
+
+  // the general variant constructor which may be used in conjunction with a row variable
+  private def variantVar: Parser[TlaType1] = {
+    VARIANT() ~ LPAREN() ~ opt(typeVar) ~ RPAREN() ^^ { case _ ~ _ ~ optVar ~ _ =>
+      VariantT1(RowT1(SortedMap[String, TlaType1](), optVar))
+    }
+  }
+
   // a single component of record type, e.g., a: Int
   private def typedField: Parser[(String, TlaType1)] = {
     fieldName ~ COLON() ~ typeExpr ^^ { case IDENT(name) ~ _ ~ fieldType =>
@@ -182,13 +268,23 @@ object DefaultType1Parser extends Parsers with Type1Parser {
         })
   }
 
+  private def tag: Parser[IDENT] = {
+    accept("variant tag",
+        { case f @ IDENT(_) =>
+          f
+        })
+  }
+
   // a type variable, e.g., c
   private def typeVar: Parser[VarT1] = {
-    accept("typeVar", { case IDENT(name) if VarT1.isValidName(name) => VarT1(name) })
+    accept("type variable",
+        {
+          case IDENT(name) if VarT1.isValidName(name) => VarT1(name)
+        })
   }
 
   // a type constant or an alias name, e.g., BAZ
   private def typeConst: Parser[ConstT1] = {
-    acceptMatch("typeConst", { case IDENT(name) if (name.toUpperCase() == name) => ConstT1(name) })
+    acceptMatch("type constant", { case IDENT(name) if (name.toUpperCase() == name) => ConstT1(name) })
   }
 }

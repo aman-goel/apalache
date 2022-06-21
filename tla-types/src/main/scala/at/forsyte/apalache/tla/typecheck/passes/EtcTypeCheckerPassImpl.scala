@@ -1,16 +1,15 @@
 package at.forsyte.apalache.tla.typecheck.passes
 
+import at.forsyte.apalache.infra.ExitCodes
+import at.forsyte.apalache.infra.passes.Pass.PassResult
 import at.forsyte.apalache.infra.passes.PassOptions
-import at.forsyte.apalache.io.OutputManager
 import at.forsyte.apalache.io.annotations.store.AnnotationStore
-import at.forsyte.apalache.io.json.impl.TlaToUJson
 import at.forsyte.apalache.tla.imp.src.SourceStore
-import at.forsyte.apalache.io.lir.{TlaWriter, TlaWriterFactory}
+import at.forsyte.apalache.io.lir.TlaWriterFactory
 import at.forsyte.apalache.tla.lir.storage.{ChangeListener, SourceLocator}
 import at.forsyte.apalache.tla.lir.transformations.TransformationTracker
-import at.forsyte.apalache.tla.lir.{ModuleProperty, TlaModule, TypeTag, UID, Untyped}
+import at.forsyte.apalache.tla.lir.{Feature, ModuleProperty, RowsFeature, TlaModule, TypeTag, UID, Untyped}
 import at.forsyte.apalache.tla.typecheck.TypeCheckerTool
-import at.forsyte.apalache.io.lir.TlaType1PrinterPredefs.printer
 import at.forsyte.apalache.tla.imp.utils
 import com.google.inject.Inject
 import com.typesafe.scalalogging.LazyLogging
@@ -26,15 +25,15 @@ class EtcTypeCheckerPassImpl @Inject() (
 
   protected def inferPoly: Boolean = options.getOrElse[Boolean]("typecheck", "inferPoly", true)
 
-  protected def passNumber: String = "01"
+  protected def useRows: Boolean =
+    options.getOrElse[Seq[Feature]]("general", "features", Seq()).contains(RowsFeature())
 
   override def name: String = "TypeCheckerSnowcat"
 
-  override def execute(tlaModule: TlaModule): Option[TlaModule] = {
+  override def execute(tlaModule: TlaModule): PassResult = {
     logger.info(" > Running Snowcat .::.")
-    dumpToJson(tlaModule, "pre")
 
-    val tool = new TypeCheckerTool(annotationStore, inferPoly)
+    val tool = new TypeCheckerTool(annotationStore, inferPoly, useRows)
 
     // when this flag is true by the end of type checking, we have recovered the types of all expressions
     var isTypeCoverageComplete = true
@@ -44,7 +43,7 @@ class EtcTypeCheckerPassImpl @Inject() (
       val locStr = findLoc(uid)
       val msg = s"[$locStr]: Failed to recover the expression type for uid=$uid. You may see an error later."
       logger.error(msg)
-      Untyped()
+      Untyped
     }
 
     val listener = new LoggingTypeCheckerListener(sourceStore, changeListener, inferPoly)
@@ -54,26 +53,14 @@ class EtcTypeCheckerPassImpl @Inject() (
       case Some(newModule) =>
         logger.info(" > Your types are purrfect!")
         logger.info(if (isTypeCoverageComplete) " > All expressions are typed" else " > Some expressions are untyped")
-        dumpToJson(newModule, "post")
-        writerFactory
-          .writeModuleAllFormats(newModule.copy(name = s"${passNumber}_Out$name"), TlaWriter.STANDARD_MODULES)
+        writeOut(writerFactory, newModule)
 
         utils.writeToOutput(newModule, options, writerFactory, logger, sourceStore)
 
-        Some(newModule)
+        Right(newModule)
       case None =>
         logger.info(" > Snowcat asks you to fix the types. Meow.")
-        None
-    }
-  }
-
-  private def dumpToJson(module: TlaModule, prefix: String): Unit = {
-    val fname = s"${passNumber}_out-$prefix-$name.json"
-    OutputManager.withWriterInIntermediateDir(fname) { writer =>
-      val sourceLocator: SourceLocator = SourceLocator(sourceStore.makeSourceMap, changeListener)
-      val jsonText = new TlaToUJson(Some(sourceLocator)).makeRoot(Seq(module)).toString
-      writer.write(jsonText)
-      logger.debug(s" > JSON output: $fname")
+        Left(ExitCodes.ERROR_TYPECHECK)
     }
   }
 

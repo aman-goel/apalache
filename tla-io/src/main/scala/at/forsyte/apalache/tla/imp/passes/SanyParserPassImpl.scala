@@ -1,12 +1,14 @@
 package at.forsyte.apalache.tla.imp.passes
 
+import at.forsyte.apalache.infra.ExitCodes
+import at.forsyte.apalache.infra.passes.Pass.PassResult
 import at.forsyte.apalache.infra.passes.PassOptions
 import at.forsyte.apalache.io.annotations.store._
 import at.forsyte.apalache.io.json.impl.{DefaultTagReader, UJsonRep, UJsonToTla}
 import at.forsyte.apalache.tla.imp.src.SourceStore
 import at.forsyte.apalache.tla.lir.{CyclicDependencyError, TlaModule}
 import at.forsyte.apalache.tla.lir.transformations.standard.DeclarationSorter
-import at.forsyte.apalache.io.lir.{TlaWriter, TlaWriterFactory}
+import at.forsyte.apalache.io.lir.TlaWriterFactory
 import at.forsyte.apalache.tla.imp.{utils, SanyImporter, SanyImporterException}
 import com.google.inject.Inject
 import com.typesafe.scalalogging.LazyLogging
@@ -28,53 +30,48 @@ class SanyParserPassImpl @Inject() (
 
   override def name: String = "SanyParser"
 
-  override def execute(module: TlaModule): Option[TlaModule] = {
-    var rootModule: Option[TlaModule] = None
-
+  override def execute(module: TlaModule): PassResult = {
     val filename = options.getOrError[String]("parser", "filename")
-    if (filename.endsWith(".json")) {
+    var rootModule: TlaModule = if (filename.endsWith(".json")) {
       try {
         val moduleJson = UJsonRep(ujson.read(new File(filename)))
         val modules = new UJsonToTla(Some(sourceStore))(DefaultTagReader).fromRoot(moduleJson)
-        rootModule = modules match {
-          case rMod +: Nil => Some(rMod)
-          case _           => None
+        modules match {
+          case rMod +: Nil => rMod
+          case _ => {
+            logger.error("  > Error parsing file " + filename)
+            return Left(ExitCodes.ERROR_SPEC_PARSE)
+          }
         }
       } catch {
         case e: Exception =>
+          logger.error("  > Error parsing file " + filename)
           logger.error("  > " + e.getMessage)
-          rootModule = None
+          return Left(ExitCodes.ERROR_SPEC_PARSE)
       }
     } else {
       val (rootName, modules) =
         new SanyImporter(sourceStore, annotationStore)
           .loadFromFile(new File(filename))
-      rootModule = modules.get(rootName)
+      modules.get(rootName).get
     }
-    rootModule match {
-      case None =>
-        logger.error("  > Error parsing file " + filename)
-        None
 
-      case Some(mod) =>
-        // In rare cases, declarations may be out of order, as a result of substitution. Reorder them.
-        rootModule =
-          try {
-            Some(DeclarationSorter.instance(mod))
-          } catch {
-            case e: CyclicDependencyError =>
-              // re-throw the error for the nice error message
-              throw new SanyImporterException(e.getMessage)
-          }
+    rootModule =
+      try {
+        DeclarationSorter.instance(rootModule)
+      } catch {
+        case e: CyclicDependencyError =>
+          // re-throw the error for the nice error message
+          throw new SanyImporterException(e.getMessage)
+      }
 
-        // save the output
-        writerFactory.writeModuleAllFormats(rootModule.get.copy(name = "00_OutParser"), TlaWriter.STANDARD_MODULES)
+    // save the output
+    writeOut(writerFactory, rootModule)
 
-        // write parser output to specified destination, if requested
-        utils.writeToOutput(rootModule.get, options, writerFactory, logger, sourceStore)
+    // write parser output to specified destination, if requested
+    utils.writeToOutput(rootModule, options, writerFactory, logger, sourceStore)
 
-        rootModule
-    }
+    Right(rootModule)
   }
 
   override def dependencies = Set()

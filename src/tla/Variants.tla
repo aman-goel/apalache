@@ -12,26 +12,33 @@
  *)
 
 (**
- * Wrap a record into a variant. The record must contain the field `tag`,
- * and the value of the tag field must be a string literal.
+ * Wrap a value with a variant.
  *
- * @param rec a record that contains a field `tag`
+ * @param rec a value
  * @return the record wrapped in the variant type
+ *
+ * The type looks like follows, when __tagName == "Tag":
+ *
+ *   (Str, a) => Tag(a) | b
  *)
-Variant(rec) ==
+Variant(__tagName, __value) ==
     \* default untyped implementation
-    rec 
+    [ tag |-> __tagName, value |-> __value ]
 
 (**
  * Filter a set of variants with the provided tag value.
  *
  * @param `S` a set of variants that are constructed with `Variant(...)`
- * @param `tagValue` a string literal that is used to filter the set elements
+ * @param `tagValue` a constant string that is used to filter the set elements
  * @return the set of elements of S that are tagged with `tagValue`.
+ *
+ * The type looks like follows, when __tagName == "Tag":
+ *
+ *   (Str, Set(Tag(a) | b)) => Set(a)
  *)
-FilterByTag(S, tagValue) ==
+VariantFilter(__tagName, __S) ==
     \* default untyped implementation
-    { e \in S: e.tag = tagValue }
+    { __d \in { __e \in __S: __e.tag = __tagName }: __d.value }
 
 
 (**
@@ -43,32 +50,45 @@ FilterByTag(S, tagValue) ==
  * the tag `tagValue`.
  *
  * @param `variant` a variant that is constructed with `Variant(...)`
- * @param `tagValue` a string literal that is used to extract a record
+ * @param `tagValue` a constant string that is used to extract a record
  * @param `ThenOper` an operator that is called
  *        when `variant` is tagged with `tagValue`
  * @param `ElseOper` an operator that is called
  *        when `variant` is tagged with a value different from `tagValue`
  * @return the result returned by either `ThenOper`, or `ElseOper`
+ *
+ * The type could look like follows, when __tagName == "Tag":
+ *
+ *   (
+ *     Str,
+ *     Tag(a) | b,
+ *     a => r,
+ *     Variant(b) => r
+ *   ) => r
  *)
-MatchTag(variant, tagValue, ThenOper(_), ElseOper(_)) ==
+VariantMatch(__tagName, __variant, __ThenOper(_), __ElseOper(_)) ==
     \* default untyped implementation
-    IF variant.tag = tagValue
-    THEN ThenOper(variant)
-    ELSE ElseOper(variant)
+    IF __variant.tag = __tagName
+    THEN __ThenOper(__variant.value)
+    ELSE __ElseOper(__variant)
 
 (**
- * In case when `variant` allows for one record type,
- * apply `ThenOper(rec)`, where `rec` is a record extracted from `variant`.
- * The type checker must enforce that `variant` allows for one record type.
- * The untyped implementation does not perform such a test,
- * as it is impossible to do so without types.
+ * In cases where `variant` allows for one value,
+ * extract the associated value and return it.
+ * The type checker must enforce that `variant` allows for one option.
  *
+ * @param `tagValue` the tag attached to the variant
  * @param `variant` a variant that is constructed with `Variant(...)`
- * @param `ThenOper` an operator that is called
- *        when `variant` is tagged with `tagValue`
- * @return the result returned by `ThenOper`
+ * @return the value extracted from the variant
+ *
+ * Its type could look like follows:
+ *
+ *   (Str, Tag(a)) => a
  *)
-MatchOnly(variant, ThenOper(_)) ==
+VariantGet(__tagName, __variant) ==
     \* default untyped implementation
-    ThenOper(variant)
+    IF __variant.tag = __tagName
+    THEN __variant.value
+    ELSE \* trigger an error in TLC by choosing a non-existant element
+         CHOOSE x \in { __variant }: x.tag = __tagName
 ===============================================================================

@@ -9,6 +9,7 @@ import org.bitbucket.inkytonik.kiama.output.PrettyPrinter
 import at.forsyte.apalache.tla.lir.UntypedPredefs._
 
 import scala.collection.immutable.{HashMap, HashSet}
+import at.forsyte.apalache.io.PrettyPrinterError
 
 /**
  * <p>A pretty printer to a file that formats a TLA+ expression to a given text width (normally, 80 characters). As
@@ -176,7 +177,7 @@ class PrettyWriter(
 
         wrapWithParen(parentPrecedence, op.precedence, doc)
 
-      case OperEx(TlaFunOper.enum, keysAndValues @ _*) =>
+      case OperEx(TlaFunOper.rec, keysAndValues @ _*) =>
         // a record, e.g., [ x |-> 1, y |-> 2 ]
         val (ks, vs) = keysAndValues.zipWithIndex.partition(_._2 % 2 == 0)
         val (keys, values) = (ks.map(_._1), vs.map(_._1))
@@ -462,6 +463,8 @@ class PrettyWriter(
 
         group(ssep(decls.map(eachDecl).toList, line) <>
           line <> toDoc((0, 0), body))
+
+      case expr => throw new PrettyPrinterError(s"PrettyPrinter failed toDoc conversion on expression ${expr}")
     }
   }
 
@@ -579,8 +582,8 @@ class PrettyWriter(
   }
 
   private def parseableName(name: String): String = {
-    // An operator name may contain '!', if it comes from an instance. Replace it '!' with "_I_".
-    // Additionally, the name may contain '$', which is produced during preprocessing. Replace it with "_SI_".
+    // An operator name may contain '!' if it comes from an instance. Replace '!' with "_i_".
+    // Additionally, the name may contain '$', which is produced during preprocessing. Replace '$' with "_si_".
     name.replaceAll("!", "_i_").replaceAll("\\$", "_si_")
   }
 

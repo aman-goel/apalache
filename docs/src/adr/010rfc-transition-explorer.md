@@ -52,7 +52,7 @@ In the current architecture, there is a single mode of operation in which
   specification,
 - the specification and configurations are parsed and pre-processed,
 - and then the model checker proper drives the
-  [TransitionExecutor](../../src/adr/003adr-trex.md) to effect symbolic
+  [TransitionExecutor](./003adr-trex.md) to effect symbolic
   executions verifying the specified properties for the specified model.
 
 This RFC proposes the addition of a *symbolic transition exploration server*.
@@ -170,7 +170,7 @@ with `Example`.
 
 In essence, this proposed API is only a thin wrapper around the
 [TransitionExecutor
-class](https://github.com/informalsystems/apalache/tree/master/tla-bmcmt/src/main/scala/at/forsyte/apalache/tla/bmcmt/trex/TransitionExecutor.scala).
+class](https://github.com/informalsystems/apalache/tree/unstable/tla-bmcmt/src/main/scala/at/forsyte/apalache/tla/bmcmt/trex/TransitionExecutor.scala).
 During previous iterations of the proposed API we discussed exposing a
 higher-level API, targeted at meeting the requirements more directly.  However,
 discussion revealed that the expensive computational costs of SAT solving in

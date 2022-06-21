@@ -128,6 +128,10 @@ $ apalache-mc config --enable-stats=true | sed 's/[IEW]@.*//'
 Statistics collection is ON.
 ...
 EXITCODE: OK
+$ apalache-mc parse Empty.tla | grep '# Usage statistics'
+...
+# Usage statistics is ON. Thank you!
+...
 $ grep -q -v NO_STATISTICS $HOME/.tlaplus/esc.txt
 $ echo NO_STATISTICS >$HOME/.tlaplus/esc.txt
 ```
@@ -146,13 +150,59 @@ $ apalache-mc config --enable-stats=false | sed 's/[IEW]@.*//'
 Statistics collection is OFF.
 ...
 EXITCODE: OK
+$ apalache-mc parse Empty.tla | grep '# Usage statistics'
+...
+# Usage statistics is OFF. We care about your privacy.
+...
 $ head -n 1 $HOME/.tlaplus/esc.txt
 NO_STATISTICS
+```
+
+## error handling for non-existent files
+
+Ensure that we exit gracefully when commands are called on nonexistent files.
+
+NOTE: We truncate the output to avoid printing the file, making the test
+indifferent to the execution environment (including in docker).
+
+```sh
+$ for cmd in check parse typecheck transpile; do apalache-mc $cmd nonexistent-file.tla 2>&1 | grep -o -e "EXITCODE: ERROR (255)" -e "Cannot find source file for module"; done
+Cannot find source file for module
+EXITCODE: ERROR (255)
+Cannot find source file for module
+EXITCODE: ERROR (255)
+Cannot find source file for module
+EXITCODE: ERROR (255)
+Cannot find source file for module
+EXITCODE: ERROR (255)
 ```
 
 ## running the parse command
 
 This command parses a TLA+ specification with the SANY parser.
+
+### parse Empty succeeds
+
+```sh
+$ apalache-mc parse Empty.tla | sed 's/I@.*//'
+...
+EXITCODE: OK
+```
+
+### parse Empty with --features=rows succeeds
+
+```sh
+$ apalache-mc parse --features=rows Empty.tla | sed 's/I@.*//'
+...
+EXITCODE: OK
+```
+
+### parse Empty with an unsupported feature fails
+
+```sh
+$ apalache-mc parse --features=feature.unsupported Empty.tla 2>&1 | grep 'Failed to parse'
+Failed to parse command parse: Incorrect value for option features, got 'feature.unsupported', expected a feature: rows
+```
 
 ### parse LocalDefClash576 succeeds
 
@@ -334,10 +384,10 @@ EXITCODE: ERROR (255)
 This simple test demonstrates how to test a spec by isolating the input with generators.
 
 ```sh
-$ apalache-mc test TestGen.tla Prepare Test Assertion | sed 's/I@.*//'
+$ apalache-mc test --features=rows TestGen.tla Prepare Test Assertion | sed 's/I@.*//'
 ...
 The outcome is: Error
-Checker has found an example. Check counterexample.tla.
+Found a violation of the postcondition. Check violation.tla.
 ...
 EXITCODE: ERROR (12)
 ```
@@ -428,7 +478,7 @@ EXITCODE: OK
 ### check Fix365_ExistsSubset3 succeeds: regression for issue 365 (array-encoding)
 
 ```sh
-$ apalache-mc check --length=10 Fix365_ExistsSubset3.tla | sed 's/I@.*//'
+$ apalache-mc check --features=rows --length=10 Fix365_ExistsSubset3.tla | sed 's/I@.*//'
 ...
 The outcome is: NoError
 ...
@@ -458,7 +508,7 @@ EXITCODE: OK
 ### check Bug540 succeeds: regression for issue 540 (array-encoding)
 
 ```sh
-$ apalache-mc check --cinit=CInit Bug540.tla | sed 's/I@.*//'
+$ apalache-mc check --features=rows --cinit=CInit Bug540.tla | sed 's/I@.*//'
 ...
 The outcome is: NoError
 ...
@@ -468,7 +518,7 @@ EXITCODE: OK
 ### check Bug593 fails correctly: regression for issue 593 (array-encoding)
 
 ```sh
-$ apalache-mc check Bug593.tla | sed 's/I@.*//'
+$ apalache-mc check --features=rows Bug593.tla | sed 's/I@.*//'
 ...
 EXITCODE: ERROR (255)
 ```
@@ -824,21 +874,35 @@ EXITCODE: OK
 ### check HandshakeWithTypes.tla with length 4 succeeds (array-encoding)
 
 ```sh
-$ apalache-mc check --length=4 --inv=Inv HandshakeWithTypes.tla | sed 's/I@.*//'
+$ apalache-mc check --features=rows --length=4 --inv=Inv HandshakeWithTypes.tla | sed 's/I@.*//'
 ...
 The outcome is: NoError
 ...
 EXITCODE: OK
 ```
 
-### check HandshakeWithTypes.tla with lengh 5 deadlocks (array-encoding)
+### check HandshakeWithTypes.tla with length 5 deadlocks (array-encoding)
 
 ```sh
-$ apalache-mc check --length=5 --inv=Inv HandshakeWithTypes.tla | sed 's/I@.*//'
+$ apalache-mc check --features=rows --length=5 --inv=Inv HandshakeWithTypes.tla | sed 's/I@.*//'
 ...
 The outcome is: Deadlock
 ...
 EXITCODE: ERROR (12)
+```
+
+### check HandshakeWithTypes.tla with length 5 passes with --no-deadlock
+
+The option `--no-deadlock` forces the model checker to pass, even if it cannot
+extend an execution prefix. See a discussion in
+[#1640](https://github.com/informalsystems/apalache/issues/1640).
+
+```sh
+$ apalache-mc check --features=rows --length=5 --no-deadlock=1 --inv=Inv HandshakeWithTypes.tla | sed 's/I@.*//'
+...
+The outcome is: ExecutionsTooShort
+...
+EXITCODE: OK
 ```
 
 ### check trivial violation of FALSE invariant (array-encoding)
@@ -870,125 +934,203 @@ The outcome is: NoError
 EXITCODE: OK
 ```
 
-### check Rec1.tla succeeds
+### check Rec1.tla succeeds typecheck
+
+```sh
+$ apalache-mc typecheck Rec1.tla | sed 's/I@.*//'
+...
+Type checker [OK]
+...
+EXITCODE: OK
+```
+
+### check Rec1.tla fails check
 
 ```sh
 $ apalache-mc check --length=5 --inv=Inv Rec1.tla | sed 's/I@.*//'
 ...
-The outcome is: NoError
+EXITCODE: ERROR (255)
+```
+
+### check Rec2.tla succeeds typecheck
+
+```sh
+$ apalache-mc typecheck Rec2.tla | sed 's/I@.*//'
+...
+Type checker [OK]
 ...
 EXITCODE: OK
 ```
 
-### check Rec2.tla succeeds
+### check Rec2.tla fails check
 
 ```sh
 $ apalache-mc check --length=5 --inv=Inv Rec2.tla | sed 's/I@.*//'
 ...
-The outcome is: NoError
+EXITCODE: ERROR (255)
+```
+
+### check Rec3.tla succeeds typecheck
+
+```sh
+$ apalache-mc typecheck Rec3.tla | sed 's/I@.*//'
+...
+Type checker [OK]
 ...
 EXITCODE: OK
 ```
 
-### check Rec3.tla succeeds
+### check Rec3.tla fails check
 ```sh
 $ apalache-mc check --length=10 --inv=Inv Rec3.tla | sed 's/I@.*//'
 ...
-The outcome is: NoError
+EXITCODE: ERROR (255)
+```
+
+### check Rec4.tla succeeds typecheck
+
+```sh
+$ apalache-mc typecheck Rec4.tla | sed 's/I@.*//'
+...
+Type checker [OK]
 ...
 EXITCODE: OK
 ```
 
-### check Rec4.tla succeeds
+### check Rec4.tla fails check
 
 Unfolding Fibonacci numbers
 
 ```sh
 $ apalache-mc check --length=10 --inv=Inv Rec4.tla | sed 's/I@.*//'
 ...
-The outcome is: NoError
+EXITCODE: ERROR (255)
+```
+
+### check Rec5.tla succeeds typecheck
+
+```sh
+$ apalache-mc typecheck Rec5.tla | sed 's/I@.*//'
+...
+Type checker [OK]
 ...
 EXITCODE: OK
 ```
 
-### check Rec5.tla succeeds
+### check Rec5.tla fails check
 
 ```sh
 $ apalache-mc check --length=5 --inv=Inv Rec5.tla | sed 's/I@.*//'
 ...
-The outcome is: NoError
+EXITCODE: ERROR (255)
+```
+
+### check Rec6.tla succeeds typecheck
+
+```sh
+$ apalache-mc typecheck Rec6.tla | sed 's/I@.*//'
+...
+Type checker [OK]
 ...
 EXITCODE: OK
 ```
 
-### check Rec6.tla succeeds
+### check Rec6.tla fails check
 
 ```sh
 $ apalache-mc check --length=5 --inv=Inv Rec6.tla | sed 's/I@.*//'
 ...
-The outcome is: NoError
+EXITCODE: ERROR (255)
+```
+
+### check Rec8.tla succeeds typecheck
+
+```sh
+$ apalache-mc typecheck Rec8.tla | sed 's/I@.*//'
+...
+Type checker [OK]
 ...
 EXITCODE: OK
 ```
 
-### check Rec8.tla succeeds
+### check Rec8.tla fails check
 
 ```sh
 $ apalache-mc check --length=10 --inv=Inv Rec8.tla | sed 's/I@.*//'
 ...
-The outcome is: NoError
+EXITCODE: ERROR (255)
+```
+
+### check Rec9.tla succeeds typecheck
+
+```sh
+$ apalache-mc typecheck Rec9.tla | sed 's/I@.*//'
+...
+Type checker [OK]
 ...
 EXITCODE: OK
 ```
 
-### check Rec9.tla succeeds
+### check Rec9.tla fails check
 
 ```sh
 $ apalache-mc check --length=3 --inv=Inv Rec9.tla | sed 's/I@.*//'
 ...
-The outcome is: NoError
+EXITCODE: ERROR (255)
+```
+
+### check Rec10.tla succeeds typecheck
+
+```sh
+$ apalache-mc typecheck Rec10.tla | sed 's/I@.*//'
+...
+Type checker [OK]
 ...
 EXITCODE: OK
 ```
 
-### check Rec10.tla fails without UNROLL_DEFAULT_Fact
+### check Rec10.tla fails check
 
 ```sh
 $ apalache-mc check Rec10.tla | sed 's/[IEW]@.*//'
 ...
-Input error (see the manual): Recursive operator Fact requires an annotation UNROLL_DEFAULT_Fact. See: https://apalache.informal.systems/docs/apalache/principles.html#recursion
-...
 EXITCODE: ERROR (255)
 ```
 
-### check Rec11.tla fails without UNROLL_TIMES_Fact
+### check Rec11.tla succeeds typecheck
 
 ```sh
-$ apalache-mc check Rec11.tla | sed 's/[IEW]@.*//'
+$ apalache-mc typecheck Rec11.tla | sed 's/I@.*//'
 ...
-Input error (see the manual): Recursive operator Fact requires an annotation UNROLL_TIMES_Fact. See: https://apalache.informal.systems/docs/apalache/principles.html#recursion
-...
-EXITCODE: ERROR (255)
-```
-
-### check Rec12.tla works with Init
-
-```sh
-$ apalache-mc check --inv=Inv Rec12.tla | sed 's/[IEW]@.*//'
-...
-The outcome is: NoError
+Type checker [OK]
 ...
 EXITCODE: OK
 ```
 
-### check Rec12.tla produces an error with Init2
+### check Rec11.tla fails check
 
 ```sh
-$ apalache-mc check --init=Init2 --inv=Inv Rec12.tla | sed 's/[IEW]@.*//'
+$ apalache-mc check Rec11.tla | sed 's/[IEW]@.*//'
 ...
-The outcome is: Error
+EXITCODE: ERROR (255)
+```
+
+### check Rec12.tla succeeds typecheck
+
+```sh
+$ apalache-mc typecheck Rec12.tla | sed 's/I@.*//'
 ...
-EXITCODE: ERROR (12)
+Type checker [OK]
+...
+EXITCODE: OK
+```
+
+### check Rec12.tla fails check
+
+```sh
+$ apalache-mc check --inv=Inv Rec12.tla | sed 's/[IEW]@.*//'
+...
+EXITCODE: ERROR (255)
 ```
 
 ### check Rec13.tla succeeds
@@ -1000,7 +1142,6 @@ The outcome is: NoError
 ...
 EXITCODE: OK
 ```
-
 
 ### check ExistsAsValue.tla succeeds
 
@@ -1015,7 +1156,7 @@ EXITCODE: OK
 ### check reorderTest.tla MayFail succeeds: fixed SMT fails under SMT-based assignment finding
 
 ```sh
-$ apalache-mc check --next=MayFail --tuning=reorderTest.properties reorderTest.tla | sed 's/I@.*//'
+$ apalache-mc check --next=MayFail --tuning-options-file=reorderTest.properties reorderTest.tla | sed 's/I@.*//'
 ...
 The outcome is: NoError
 ...
@@ -1174,16 +1315,6 @@ The outcome is: NoError
 EXITCODE: OK
 ```
 
-### check use of TLA_PATH for modules in child directory succeeds (array-encoding)
-
-```sh
-$ TLA_PATH=./tla-path-tests apalache-mc check ./tla-path-tests/ImportingModule.tla | sed 's/I@.*//'
-...
-The outcome is: NoError
-...
-EXITCODE: OK
-```
-
 ### check SimpleLambda succeeds
 Regression test for https://github.com/informalsystems/apalache/issues/1446
 
@@ -1202,17 +1333,20 @@ $ apalache-mc check --inv=Inv NestedCallByName.tla | sed 's/I@.*//'
 EXITCODE: OK
 ```
 
-### check Bug914 succeeds
+### typecheck Bug914 fails
 
 Regression test for https://github.com/informalsystems/apalache/issues/914 In
 the earlier version, we expected the model checker to complain about
-mismatching record types. In the latest version, this bug disappeared, due to
-the changes in the type checker.
+mismatching record types. The new type checker with row typing is reporting a
+type error, and this is what we expect.
 
 ```sh
-$ apalache-mc check Bug914.tla | sed 's/I@.*//'
+$ apalache-mc typecheck --features=rows Bug914.tla | sed 's/[IE]@.*//'
 ...
-EXITCODE: OK
+[Bug914.tla:21:9-21:26]: Arguments to = should have the same type. For arguments m, ["foo" ↦ TRUE] with types {  }, { foo: Bool }, in expression m = (["foo" ↦ TRUE])
+[Bug914.tla:21:1-21:26]: Error when computing the type of Init
+...
+EXITCODE: ERROR (120)
 ```
 
 ### check RecordExcept987 succeeds
@@ -1221,7 +1355,7 @@ Regression test for https://github.com/informalsystems/apalache/issues/987
 We should always use sorted keys on record types.
 
 ```sh
-$ apalache-mc check RecordExcept987.tla | sed 's/I@.*//'
+$ apalache-mc check --features=rows RecordExcept987.tla | sed 's/I@.*//'
 ...
 EXITCODE: OK
 ```
@@ -1247,7 +1381,7 @@ $ apalache-mc check Bug1126.tla | sed 's/[IE]@.*//'
 ...
 Bug1126.tla:15:14-15:27: unsupported expression: Seq(_) produces an infinite set of unbounded sequences. See: https://apalache.informal.systems/docs/apalache/known-issues.html#using-seqs
 ...
-EXITCODE: ERROR (12)
+EXITCODE: ERROR (75)
 ```
 
 ### check SetSndRcv succeeds (array-encoding)
@@ -1268,6 +1402,68 @@ Sets should not become unconstrained when union is performed.
 
 ```sh
 $ apalache-mc check --inv=Inv --length=6 --cinit=CInit SetAddDel.tla | sed 's/I@.*//'
+...
+EXITCODE: OK
+```
+
+### check PizzaOrder succeeds (array-encoding)
+
+```sh
+$ apalache-mc check --features=rows --cinit=ConstInit --inv=NoDoubleDelivery PizzaOrder.tla | sed 's/I@.*//'
+...
+The outcome is: Error
+...
+EXITCODE: ERROR (12)
+```
+
+### check OracleFunSet succeeds (array-encoding)
+
+Regression test for https://github.com/informalsystems/apalache/issues/1680
+Function sets themselves should be able to be set elements.
+
+```sh
+$ apalache-mc check OracleFunSet.tla | sed 's/I@.*//'
+...
+EXITCODE: OK
+```
+
+### check Verifier_functionComparison fails (array-encoding)
+
+Regression test for https://github.com/informalsystems/apalache/issues/1811
+Comparisons with functions with empty domains should be sound (as should everything else)
+
+```sh
+$ apalache-mc check Verifier_functionComparison.tla | sed 's/I@.*//'
+...
+EXITCODE: ERROR (12)
+```
+
+### check PickPerf succeeds (array-encoding)
+
+A performance test.
+
+```sh
+$ apalache-mc check --discard-disabled=0 --tuning-options=search.invariant.mode=after PickPerf.tla | sed 's/I@.*//'
+...
+EXITCODE: OK
+```
+
+### check PickPerf2 succeeds (array-encoding)
+
+A performance test.
+
+```sh
+$ apalache-mc check --discard-disabled=0 --tuning-options=search.invariant.mode=after PickPerf2.tla | sed 's/I@.*//'
+...
+EXITCODE: OK
+```
+
+### simulate y2k with --save-runs succeeds
+
+```sh
+$ apalache-mc simulate --length=10 --max-run=5 --save-runs --inv=Safety y2k_instance.tla | sed 's/I@.*//'
+...
+The outcome is: NoError
 ...
 EXITCODE: OK
 ```
@@ -1334,7 +1530,7 @@ $ apalache-mc check --config=Config1.cfg Config.tla | sed 's/[IEW]@.*//'
 ...
 Config.tla:58:5-58:14: unsupported expression: ♢(x > 10)
 ...
-EXITCODE: ERROR (12)
+EXITCODE: ERROR (75)
 ```
 
 ### configure via TLC config and override it via CLI
@@ -1350,7 +1546,7 @@ $ apalache-mc check --config=Config1.cfg --init=Init2 --next=Next2 Config.tla | 
 ...
 Config.tla:58:5-58:14: unsupported expression: ♢(x > 10)
 ...
-EXITCODE: ERROR (12)
+EXITCODE: ERROR (75)
 ```
 
 ### configure missing property in TLC config
@@ -1439,11 +1635,6 @@ $ apalache-mc check --config=ConfigParams.cfg ConfigParams.tla | sed 's/[IEW]@.*
   > Set the initialization predicate to Init
   > Set the transition predicate to Next
   > Set an invariant to Inv
-  > Replaced CONSTANT MyInt with 42
-  > Replaced CONSTANT MyStr with "hello"
-  > Replaced CONSTANT MyModelValue1 with "ModelValue_Model1"
-  > Replaced CONSTANT MyModelValue2 with "ModelValue_Model2"
-  > Replaced CONSTANT MySet with {1, 2, 3}
 ...
 The outcome is: NoError
 ...
@@ -1451,6 +1642,8 @@ EXITCODE: OK
 ```
 
 ### configure via TLC config and replace operators
+
+The replacements make the invariant hold true.
 
 ```sh
 $ apalache-mc check --config=ConfigReplacements2.cfg ConfigReplacements.tla | sed 's/[IEW]@.*//'
@@ -1469,13 +1662,24 @@ The outcome is: NoError
 EXITCODE: OK
 ```
 
-### configure via TLC config and replace operators helps us to keep the invariant
+### configure via TLC config on non-existant config
+
+When a configuration file does not exist, the tool should error.
+
+```sh
+$ apalache-mc check --inv=Inv --config=ThisConfigDoesNotExist.cfg ConfigReplacements.tla | sed 's/[IEW]@.*//'
+...
+Configuration error (see the manual): TLC config file not found: ThisConfigDoesNotExist.cfg
+...
+EXITCODE: ERROR (255)
+```
+
+### configure via TLC config on no config
+
+When a configuration file is not specified, the invariant should fail.
 
 ```sh
 $ apalache-mc check --inv=Inv ConfigReplacements.tla | sed 's/[IEW]@.*//'
-...
-  > ConfigReplacements.cfg: Loading TLC configuration
-  > No TLC configuration found. Skipping.
 ...
 The outcome is: Error
 ...
@@ -1639,16 +1843,17 @@ EXITCODE: ERROR (12)
 ### check bug #874
 
 Unhandled `IllegalArgumentException` when accessing a non-existent field on a
-record.
+record. With the old records, this spec was failing during model checking.
+With the new records, this spec is failing at type checking.
 
 See https://github.com/informalsystems/apalache/issues/874
 
 ```sh
-$ apalache-mc check Bug874.tla | sed 's/[IEW]@.*//'
+$ apalache-mc typecheck --features=rows Bug874.tla | sed 's/[IEW]@.*//'
 ...
-Bug874.tla:4:17-4:27: Input error (see the manual): Access to non-existent record field b in (["a" ↦ 2])["b"]
+[Bug874.tla:4:17-4:27]: Cannot apply ["a" ↦ 2] to the argument "b" in (["a" ↦ 2])["b"].
 ...
-EXITCODE: ERROR (255)
+EXITCODE: ERROR (120)
 ```
 
 ### check letpoly.tla
@@ -1703,6 +1908,30 @@ Bug931.tla:6:20-6:21: type input error: Found a polymorphic type: Set(b)
 EXITCODE: ERROR (255)
 ```
 
+### check Bug1682.tla
+
+```sh
+$ apalache-mc check --init=Inv --inv=Inv --length=1 Bug1682.tla | sed 's/[IEW]@.*//'
+...
+EXITCODE: OK
+```
+
+### check Bug1735.tla (array-encoding)
+
+```sh
+$ apalache-mc check --inv=Inv --length=1 Bug1735.tla | sed 's/[IEW]@.*//'
+...
+EXITCODE: ERROR (12)
+```
+
+### check Bug1794.tla
+
+```sh
+$ apalache-mc check --length=1 Bug1794.tla | sed 's/[IEW]@.*//'
+...
+EXITCODE: OK
+```
+
 ### check profiling
 
 Check that the profiler output is produced as explained in
@@ -1734,7 +1963,7 @@ Test that model values of different sorts are incomparable
 ```sh
 $ apalache-mc check --cinit=CInit --inv=Inv ModelValFail.tla | sed 's/[IEW]@.*//'
 ...
-EXITCODE: ERROR (12)
+EXITCODE: ERROR (120)
 ```
 
 ### check MC3_TwoPhaseUFO.tla succeeds with model values
@@ -1855,12 +2084,46 @@ $ apalache-mc check --length=0 --inv=AllTests TestSequences.tla | sed 's/[IEW]@.
 EXITCODE: OK
 ```
 
+### check TestSequencesExt.tla reports no error
+
+```sh
+$ apalache-mc check --length=0 --inv=AllTests TestSequencesExt.tla | sed 's/[IEW]@.*//'
+...
+EXITCODE: OK
+```
+
 ### check TestBags.tla reports no error
 
 ```sh
 $ apalache-mc check --length=0 --inv=Inv TestBags.tla | sed 's/[IEW]@.*//'
 ...
 EXITCODE: OK
+```
+
+### check TestBagsExt.tla reports no error
+
+```sh
+$ apalache-mc check --length=0 --inv=AllTests TestBagsExt.tla | sed 's/[IEW]@.*//'
+...
+EXITCODE: OK
+```
+
+### check TestInlining.tla reports no error
+
+```sh
+$ apalache-mc check --length=0 --inv=AllTests TestInlining.tla | sed 's/[IEW]@.*//'
+...
+EXITCODE: OK
+```
+
+### check TestFolds.tla reports an error
+
+```sh
+$ apalache-mc check --length=0 --inv=AllTests TestFolds.tla | sed 's/[IEW]@.*//'
+...
+TestFolds.tla:21:5-21:50: unsupported expression: Not supported: MapThenFoldSet. Use FoldSet, FoldSeq, FoldFunction.
+...
+EXITCODE: ERROR (75)
 ```
 
 ### check Test1343.tla reports no error
@@ -1905,6 +2168,14 @@ $ apalache-mc check --length=0 --inv=AllTests TestFunctions.tla | sed 's/[IEW]@.
 EXITCODE: OK
 ```
 
+### check TestBuiltinAsArg1626.tla reports no error (array-encoding)
+
+```sh
+$ apalache-mc check --length=0 --inv=AllTests TestBuiltinAsArg1626.tla | sed 's/[IEW]@.*//'
+...
+EXITCODE: OK
+```
+
 ### check TestHash2.tla reports no error (array-encoding)
 
 A regression test for using `--cinit` and hashes.
@@ -1925,7 +2196,93 @@ $ apalache-mc check --length=1 Test1425.tla | sed 's/[IEW]@.*//'
 EXITCODE: OK
 ```
 
+### check Test1623.tla reports no error
+
+A regression test for #1623 (Instantiation with .cfg + ASSUME)
+
+```sh
+$ apalache-mc check --length=3 --config=Test1623.cfg --inv=Inv Test1623.tla | sed 's/[IEW]@.*//'
+...
+EXITCODE: OK
+```
+
+### check MC_FoldExcept3.tla (slow) reports no error
+
+A test for folds with excepts, the slow case.
+
+```sh
+$ apalache-mc check --inv=DriftInv --next=NextSlow antipatterns/fold-except/MC_FoldExcept3.tla | sed 's/[IEW]@.*//'
+...
+EXITCODE: OK
+```
+
+### check MC_FoldExcept3.tla (fast) reports no error
+
+A test for folds with excepts, the fast case.
+
+```sh
+$ apalache-mc check --inv=DriftInv --next=NextFast antipatterns/fold-except/MC_FoldExcept3.tla | sed 's/[IEW]@.*//'
+...
+EXITCODE: OK
+```
+
+### check RecMem1627.tla reports no error
+
+A test for folds with excepts, the fast case.
+
+```sh
+$ apalache-mc check --features=rows --inv=TypeOK --length=1 RecMem1627.tla | sed 's/[IEW]@.*//'
+...
+EXITCODE: OK
+```
+
+### check UnchangedAsInv1663.tla reports no error
+
+A test `UNCHANGED` in an invariant.
+
+```sh
+$ apalache-mc check --inv=Inv --length=1 UnchangedAsInv1663.tla | sed 's/[IEW]@.*//'
+...
+EXITCODE: OK
+```
+
+### check TestRecordsNew.tla
+
+Check row-based records support row typing.
+
+```sh
+$ apalache-mc check --features=rows TestRecordsNew.tla | sed 's/[IEW]@.*//'
+...
+EXITCODE: OK
+```
+
+### check MC_LamportMutexTyped.tla
+
+Check the mutex algorithm with new records.
+
+```sh
+$ apalache-mc check --features=rows --length=4 MC_LamportMutexTyped.tla | sed 's/[IEW]@.*//'
+...
+EXITCODE: OK
+```
+
 ## running the typecheck command
+
+### typecheck Empty.tla reports no error
+
+```sh
+$ apalache-mc typecheck Empty.tla | sed 's/I@.*//'
+...
+EXITCODE: OK
+```
+
+### typecheck Empty.tla reports no error when rows enabled
+
+```sh
+$ apalache-mc typecheck --features=rows Empty.tla | sed 's/I@.*//'
+...
+EXITCODE: OK
+```
 
 ### typecheck ExistTuple476.tla reports no error: regression for issues 476 and 482
 
@@ -1956,7 +2313,7 @@ EXITCODE: OK
 ### typecheck CigaretteSmokersTyped.tla
 
 ```sh
-$ apalache-mc typecheck CigaretteSmokersTyped.tla | sed 's/[IEW]@.*//'
+$ apalache-mc typecheck --features=rows CigaretteSmokersTyped.tla | sed 's/[IEW]@.*//'
 ...
 PASS #1: TypeCheckerSnowcat
  > Running Snowcat .::.
@@ -2202,7 +2559,7 @@ EXITCODE: OK
 ### typecheck Except617.tla
 
 ```sh
-$ apalache-mc typecheck Except617.tla | sed 's/[IEW]@.*//'
+$ apalache-mc typecheck --features=rows Except617.tla | sed 's/[IEW]@.*//'
 ...
 PASS #1: TypeCheckerSnowcat
  > Running Snowcat .::.
@@ -2322,12 +2679,11 @@ Type unification should not recurse infinitely.
 See: https://github.com/informalsystems/apalache/issues/925
 
 ```sh
-$ apalache-mc typecheck Bug925.tla | sed 's/[IEW]@.*//'
+$ apalache-mc typecheck --features=rows Bug925.tla | sed 's/[IEW]@.*//'
 ...
-[Bug925.tla:7:1-7:24]: Expected ((a) => [f: Set(a)]) in Optional. Found: ((a) => [f: a])
 [Bug925.tla:7:1-7:24]: Error when computing the type of Optional
 ...
-EXITCODE: ERROR (255)
+EXITCODE: ERROR (120)
 ```
 
 ### typecheck letpoly.tla
@@ -2437,7 +2793,7 @@ EXITCODE: OK
 Typecheck a real spec by Leslie Lamport.
 
 ```sh
-$ apalache-mc typecheck LamportMutexTyped.tla | sed 's/[IEW]@.*//'
+$ apalache-mc typecheck --features=rows LamportMutexTyped.tla | sed 's/[IEW]@.*//'
 ...
 EXITCODE: OK
 ```
@@ -2447,7 +2803,85 @@ EXITCODE: OK
 Typecheck a model checking instance.
 
 ```sh
-$ apalache-mc typecheck MC_LamportMutexTyped.tla | sed 's/[IEW]@.*//'
+$ apalache-mc typecheck --features=rows MC_LamportMutexTyped.tla | sed 's/[IEW]@.*//'
+...
+EXITCODE: OK
+```
+
+### typecheck TestFolds.tla
+
+Typecheck the test for Folds.tla.
+
+```sh
+$ apalache-mc typecheck TestFolds.tla | sed 's/[IEW]@.*//'
+...
+EXITCODE: OK
+```
+
+### typecheck TestRecordsNew.tla
+
+Typecheck new records that support row typing.
+
+```sh
+$ apalache-mc typecheck --features=rows TestRecordsNew.tla | sed 's/[IEW]@.*//'
+...
+EXITCODE: OK
+```
+
+### typecheck TestRecordsNewIll1.tla
+
+No ill-typed record access.
+
+```sh
+$ apalache-mc typecheck --features=rows TestRecordsNewIll1.tla | sed 's/[IEW]@.*//'
+...
+EXITCODE: ERROR (120)
+```
+
+### typecheck TestRecordsNewIll2.tla
+
+No ill-typed record access.
+
+```sh
+$ apalache-mc typecheck --features=rows TestRecordsNewIll2.tla | sed 's/[IEW]@.*//'
+...
+EXITCODE: ERROR (120)
+```
+
+### typecheck TestRecordsNewIll3.tla
+
+No ill-typed record access.
+
+```sh
+$ apalache-mc typecheck --features=rows TestRecordsNewIll3.tla | sed 's/[IEW]@.*//'
+...
+EXITCODE: ERROR (120)
+```
+
+### typecheck TestRecordsNewIll4.tla
+
+No ill-typed record access.
+
+```sh
+$ apalache-mc typecheck --features=rows TestRecordsNewIll4.tla | sed 's/[IEW]@.*//'
+...
+EXITCODE: ERROR (120)
+```
+
+### typecheck TestVariants.tla
+
+Variant operators are type correct.
+
+```sh
+$ apalache-mc typecheck --features=rows TestVariants.tla | sed 's/[IEW]@.*//'
+...
+EXITCODE: OK
+```
+
+### typecheck TestReqAckVariants.tla
+
+```sh
+$ apalache-mc typecheck --features=rows TestReqAckVariants.tla | sed 's/[IEW]@.*//'
 ...
 EXITCODE: OK
 ```
@@ -2458,7 +2892,7 @@ EXITCODE: OK
 If we run with the `--out-dir` flag
 
 ```sh
-$ apalache-mc check --out-dir=./test-out-dir --length=0 Counter.tla | sed 's/[IEW]@.*//'
+$ apalache-mc check --out-dir=./test-out-dir --write-intermediate=0 --length=0 Counter.tla | sed 's/[IEW]@.*//'
 ...
 EXITCODE: OK
 ```
@@ -2466,7 +2900,15 @@ EXITCODE: OK
 ```sh
 $ find ./test-out-dir/Counter.tla/* -type f -exec basename {} \; | ./sort.sh
 detailed.log
+example0.itf.json
+example0.json
+example0.tla
+example.itf.json
+example.json
+example.tla
 log0.smt
+MCexample0.out
+MCexample.out
 run.txt
 ```
 
@@ -2504,38 +2946,40 @@ $ apalache-mc check --out-dir=./test-out-dir --write-intermediate=true --length=
 ...
 EXITCODE: OK
 $ find ./test-out-dir/Counter.tla/* -type f -exec basename {} \; | ./sort.sh
-00_OutParser.json
-00_OutParser.tla
-01_out-post-TypeCheckerSnowcat.json
-01_out-pre-TypeCheckerSnowcat.json
+00_OutSanyParser.json
+00_OutSanyParser.tla
 01_OutTypeCheckerSnowcat.json
 01_OutTypeCheckerSnowcat.tla
-02_OutConfig.json
-02_OutConfig.tla
-03_OutDesugarer.json
-03_OutDesugarer.tla
-04_OutUnroll.json
-04_OutUnroll.tla
-05_OutInline.json
-05_OutInline.tla
-06_OutPriming.json
-06_OutPriming.tla
-07_OutVCGen.json
-07_OutVCGen.tla
-08_OutPrepro.json
-08_OutPrepro.tla
-09_OutTransition.json
-09_OutTransition.tla
-10_OutOpt.json
-10_OutOpt.tla
-11_OutAnalysis.json
-11_OutAnalysis.tla
-12_out-post-PostTypeCheckerSnowcat.json
-12_OutPostTypeCheckerSnowcat.json
-12_OutPostTypeCheckerSnowcat.tla
-12_out-pre-PostTypeCheckerSnowcat.json
+02_OutConfigurationPass.json
+02_OutConfigurationPass.tla
+03_OutDesugarerPass.json
+03_OutDesugarerPass.tla
+04_OutInlinePass.json
+04_OutInlinePass.tla
+05_OutPrimingPass.json
+05_OutPrimingPass.tla
+06_OutVCGen.json
+06_OutVCGen.tla
+07_OutPreprocessingPass.json
+07_OutPreprocessingPass.tla
+08_OutTransitionFinderPass.json
+08_OutTransitionFinderPass.tla
+09_OutOptimizationPass.json
+09_OutOptimizationPass.tla
+10_OutAnalysisPass.json
+10_OutAnalysisPass.tla
+11_OutPostTypeCheckerSnowcat.json
+11_OutPostTypeCheckerSnowcat.tla
 detailed.log
+example0.itf.json
+example0.json
+example0.tla
+example.itf.json
+example.json
+example.tla
 log0.smt
+MCexample0.out
+MCexample.out
 run.txt
 $ rm -rf ./test-out-dir
 ```
@@ -2553,21 +2997,21 @@ $ rm -rf ./test-out-dir
 ### output manager: counterexamples are written to the run directory
 
 ```sh
-$ apalache-mc check --out-dir=./test-out-dir --length=2 --inv=Inv factorization.tla | sed -e 's/[IEW]@.*//'
+$ apalache-mc check --out-dir=./test-out-dir --write-intermediate=0 --length=2 --inv=Inv factorization.tla | sed -e 's/[IEW]@.*//'
 ...
 EXITCODE: ERROR (12)
 $ ls ./test-out-dir/factorization.tla/* | ./sort.sh
-counterexample1.itf.json
-counterexample1.json
-counterexample1.tla
-counterexample.itf.json
-counterexample.json
-counterexample.tla
 detailed.log
 log0.smt
-MC1.out
-MC.out
+MCviolation1.out
+MCviolation.out
 run.txt
+violation1.itf.json
+violation1.json
+violation1.tla
+violation.itf.json
+violation.json
+violation.tla
 $ rm -rf ./test-out-dir
 ```
 
@@ -2578,37 +3022,39 @@ $ apalache-mc check --out-dir=./test-out-dir --run-dir=./test-run-dir --write-in
 ...
 EXITCODE: OK
 $ find ./test-run-dir -type f -exec basename {} \; | ./sort.sh
-00_OutParser.json
-00_OutParser.tla
-01_out-post-TypeCheckerSnowcat.json
-01_out-pre-TypeCheckerSnowcat.json
+00_OutSanyParser.json
+00_OutSanyParser.tla
 01_OutTypeCheckerSnowcat.json
 01_OutTypeCheckerSnowcat.tla
-02_OutConfig.json
-02_OutConfig.tla
-03_OutDesugarer.json
-03_OutDesugarer.tla
-04_OutUnroll.json
-04_OutUnroll.tla
-05_OutInline.json
-05_OutInline.tla
-06_OutPriming.json
-06_OutPriming.tla
-07_OutVCGen.json
-07_OutVCGen.tla
-08_OutPrepro.json
-08_OutPrepro.tla
-09_OutTransition.json
-09_OutTransition.tla
-10_OutOpt.json
-10_OutOpt.tla
-11_OutAnalysis.json
-11_OutAnalysis.tla
-12_out-post-PostTypeCheckerSnowcat.json
-12_OutPostTypeCheckerSnowcat.json
-12_OutPostTypeCheckerSnowcat.tla
-12_out-pre-PostTypeCheckerSnowcat.json
+02_OutConfigurationPass.json
+02_OutConfigurationPass.tla
+03_OutDesugarerPass.json
+03_OutDesugarerPass.tla
+04_OutInlinePass.json
+04_OutInlinePass.tla
+05_OutPrimingPass.json
+05_OutPrimingPass.tla
+06_OutVCGen.json
+06_OutVCGen.tla
+07_OutPreprocessingPass.json
+07_OutPreprocessingPass.tla
+08_OutTransitionFinderPass.json
+08_OutTransitionFinderPass.tla
+09_OutOptimizationPass.json
+09_OutOptimizationPass.tla
+10_OutAnalysisPass.json
+10_OutAnalysisPass.tla
+11_OutPostTypeCheckerSnowcat.json
+11_OutPostTypeCheckerSnowcat.tla
 detailed.log
+example0.itf.json
+example0.json
+example0.tla
+example.itf.json
+example.json
+example.tla
+MCexample0.out
+MCexample.out
 run.txt
 $ rm -rf ./test-out-dir ./test-run-dir
 ```
@@ -2616,20 +3062,20 @@ $ rm -rf ./test-out-dir ./test-run-dir
 ### output manager: counterexamples can be written to specified run directory
 
 ```sh
-$ apalache-mc check --out-dir=./test-out-dir --length=2 --inv=Inv --run-dir=./test-run-dir factorization.tla | sed -e 's/[IEW]@.*//'
+$ apalache-mc check --out-dir=./test-out-dir --write-intermediate=0 --length=2 --inv=Inv --run-dir=./test-run-dir factorization.tla | sed -e 's/[IEW]@.*//'
 ...
 EXITCODE: ERROR (12)
 $ ls ./test-run-dir | ./sort.sh
-counterexample1.itf.json
-counterexample1.json
-counterexample1.tla
-counterexample.itf.json
-counterexample.json
-counterexample.tla
 detailed.log
-MC1.out
-MC.out
+MCviolation1.out
+MCviolation.out
 run.txt
+violation1.itf.json
+violation1.json
+violation1.tla
+violation.itf.json
+violation.json
+violation.tla
 $ rm -rf ./test-out-dir ./test-run-dir
 ```
 
@@ -2644,6 +3090,14 @@ $ apalache-mc check --length=0 Counter.tla | sed 's/[IEW]@.*//'
 EXITCODE: OK
 $ ls ./configured-run-dir | ./sort.sh
 detailed.log
+example0.itf.json
+example0.json
+example0.tla
+example.itf.json
+example.json
+example.tla
+MCexample0.out
+MCexample.out
 run.txt
 $ rm -rf ./configured-run-dir ./.apalache.cfg
 ```
@@ -2690,14 +3144,93 @@ $ test -d ./run-dir
 $ rm -rf ./run-dir ./.apalache.cfg
 ```
 
-## server mode
-
-### server mode: subcommand is not yet implemented
+### configuration management: invalid features are rejected with error
 
 ```sh
-$ apalache-mc server | sed 's/[IEW]@.*//'
+$ echo "features: [ invalid-feature ]" > .apalache.cfg
+$ apalache-mc check --length=0 Counter.tla | grep -o -e "Configuration error: at 'features.0'" -e "Cannot convert 'invalid-feature' to at.forsyte.apalache.tla.lir.Feature"
 ...
-Server mode is not yet implemented!
+Configuration error: at 'features.0'
+Cannot convert 'invalid-feature' to at.forsyte.apalache.tla.lir.Feature
+$ rm -rf ./.apalache.cfg
+```
+
+## module lookup
+
+### module lookup: looks up dummy module from standard library
+
+```sh
+$ cd module-lookup/subdir-no-dummy && apalache-mc parse --output=output.tla Including.tla
 ...
-EXITCODE: ERROR (255)
+EXITCODE: OK
+$ cat module-lookup/subdir-no-dummy/output.tla
+-------------------------------- MODULE output --------------------------------
+
+EXTENDS Integers, Sequences, FiniteSets, TLC, Apalache
+
+Init == TRUE
+
+Next == TRUE
+
+================================================================================
+$ rm module-lookup/subdir-no-dummy/output.tla
+```
+
+### module lookup: looks up modules in the same directory
+
+Regression test for https://github.com/informalsystems/apalache/issues/426
+
+Look up files in the same directory as the file supplied on commandline.
+
+Files in that directory take precedence over the Apalache standard library.
+
+```sh
+$ apalache-mc parse --output=output.tla module-lookup/subdir/Including.tla
+...
+EXITCODE: OK
+$ cat output.tla | grep VARIABLE
+VARIABLE same_dir
+$ rm output.tla
+```
+
+### module lookup: looks up modules in the current working directory
+
+Files in current working directory take precedence over
+
+- files in the same directory as the supplied file
+- the Apalache standard library
+
+```sh
+$ cd module-lookup && apalache-mc parse --output=output.tla subdir/Including.tla
+...
+EXITCODE: OK
+$ cat module-lookup/output.tla | grep VARIABLE
+VARIABLE parent_dir
+$ rm module-lookup/output.tla
+```
+
+### module lookup: looks up modules when in same directory
+
+Test relative paths without prefixed directories
+
+```sh
+$ cd module-lookup/subdir && apalache-mc parse --output=output.tla Including.tla
+...
+EXITCODE: OK
+$ cat module-lookup/subdir/output.tla | grep VARIABLE
+VARIABLE same_dir
+$ rm module-lookup/subdir/output.tla
+```
+
+## server mode
+
+### server mode: server can be started
+
+We start the server, save its process id, then wait long enough for it to spin
+up and output its welcome message, before killing it:
+
+```sh
+$ apalache-mc server & pid=$! && sleep 3 && kill $pid
+...
+The Apalache server is running. Press Ctrl-C to stop.
 ```

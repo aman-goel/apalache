@@ -1,10 +1,11 @@
 package at.forsyte.apalache.tla.bmcmt
 
-import at.forsyte.apalache.io.lir.CounterexampleWriter
-import at.forsyte.apalache.tla.bmcmt.Checker.{CheckerResult, Deadlock, Error, RuntimeError}
+import at.forsyte.apalache.tla.bmcmt.Checker._
 import at.forsyte.apalache.tla.bmcmt.search.ModelCheckerParams.InvariantMode
 import at.forsyte.apalache.tla.bmcmt.search.{ModelCheckerParams, SearchState}
-import at.forsyte.apalache.tla.bmcmt.trex.{ConstrainedTransitionExecutor, ExecutionSnapshot, TransitionExecutor}
+import at.forsyte.apalache.tla.bmcmt.trex.{
+  ConstrainedTransitionExecutor, DecodedExecution, ExecutionSnapshot, TransitionExecutor,
+}
 import at.forsyte.apalache.tla.lir.TypedPredefs.TypeTagAsTlaType1
 import at.forsyte.apalache.tla.lir.UntypedPredefs._
 import at.forsyte.apalache.tla.lir._
@@ -13,6 +14,8 @@ import at.forsyte.apalache.tla.lir.transformations.impl.IdleTracker
 import at.forsyte.apalache.tla.lir.transformations.standard.ReplaceFixed
 import at.forsyte.apalache.tla.lir.values.{TlaBool, TlaStr}
 import com.typesafe.scalalogging.LazyLogging
+
+import scala.util.Random
 
 /**
  * A new version of the sequential model checker. This version is using TransitionExecutor, which allows us to freely
@@ -24,7 +27,8 @@ import com.typesafe.scalalogging.LazyLogging
 class SeqModelChecker[ExecutorContextT](
     val params: ModelCheckerParams,
     val checkerInput: CheckerInput,
-    trexImpl: TransitionExecutor[ExecutorContextT])
+    trexImpl: TransitionExecutor[ExecutorContextT],
+    val listeners: Seq[ModelCheckerListener] = Nil)
     extends Checker with LazyLogging {
 
   type SnapshotT = ExecutionSnapshot[ExecutorContextT]
@@ -50,19 +54,72 @@ class SeqModelChecker[ExecutorContextT](
     checkerInput.rootModule.assumeDeclarations.foreach { d =>
       trex.assertState(d.body)
     }
-    // apply the Init predicate
-    makeStep(isNext = false, checkerInput.initTransitions)
-    // unroll the transition relation
-    while (searchState.canContinue && trex.stepNo <= params.stepsBound) {
-      // apply the Next predicate
-      makeStep(isNext = true, checkerInput.nextTransitions)
+    val constSnapshot = trex.snapshot()
+
+    // Repeat the search: 1 time in the `check` mode, and `params.nSimulationRuns` times in the `simulation` mode.
+    // If the error budget (set with `params.nMaxErrors`) is overrun, terminate immediately.
+    while (searchState.canContinue) {
+      // apply the Init predicate
+      makeStep(isNext = false, checkerInput.initTransitions)
+      // unroll the transition relation
+      while (searchState.canContinue && trex.stepNo <= params.stepsBound) {
+        // apply the Next predicate
+        makeStep(isNext = true, checkerInput.nextTransitions)
+      }
+
+      if (params.saveRuns) {
+        outputExampleRun()
+      }
+
+      searchState.onRunDone()
+      // Continue provided that there are more runs to execute and the error budget is not overrun.
+      if (searchState.canContinue) {
+        trex.recover(constSnapshot)
+        logger.info("----------------------------")
+        logger.info(s"Symbolic runs left: ${searchState.nRunsLeft}")
+      }
     }
 
     if (searchState.nFoundErrors > 0) {
       logger.info("Found %d error(s)".format(searchState.nFoundErrors))
+    } else {
+      // Output an example in the end of the search.
+      outputExampleRun()
     }
 
     searchState.finalResult
+  }
+
+  // output an example of a run, if the context is satisfiable
+  def outputExampleRun(): Unit = {
+    trex.sat(params.smtTimeoutSec) match {
+      case Some(true) =>
+        listeners.foreach(_.onExample(checkerInput.rootModule, trex.decodedExecution(), searchState.nRunsLeft))
+      case _ => ()
+    }
+  }
+
+  /**
+   * Notify all listeners that a counterexample has been found.
+   *
+   * @param rootModule
+   *   The checked TLA+ module.
+   * @param trace
+   *   The counterexample trace.
+   * @param invViolated
+   *   The invariant violation to record in the counterexample. Pass
+   *   - for invariant violations: the negated invariant,
+   *   - for deadlocks: `ValEx(TlaBool(true))`,
+   *   - for trace invariants: the applied, negated trace invariant (see [[SeqModelChecker.applyTraceInv]]).
+   * @param errorIndex
+   *   Number of found error (likely [[SearchState.nFoundErrors]]).
+   */
+  private def notifyOnError(
+      rootModule: TlaModule,
+      trace: DecodedExecution,
+      invViolated: TlaEx,
+      errorIndex: Int): Unit = {
+    listeners.foreach(_.onCounterexample(rootModule, trace, invViolated, errorIndex))
   }
 
   private def makeStep(isNext: Boolean, transitions: Seq[TlaEx]): Unit = {
@@ -81,9 +138,9 @@ class SeqModelChecker[ExecutorContextT](
 
         case Some(false) =>
           if (trex.sat(0).contains(true)) {
-            val filenames = dumpCounterexample(ValEx(TlaBool(true)))
-            val msg = s"Found a deadlock. Check an example state in: ${filenames.mkString(", ")}"
-            logger.error(msg)
+            notifyOnError(checkerInput.rootModule, trex.decodedExecution(), ValEx(TlaBool(true)),
+                searchState.nFoundErrors)
+            logger.error("Found a deadlock.")
           } else {
             logger.error(s"Found a deadlock. No SMT model.")
           }
@@ -145,13 +202,17 @@ class SeqModelChecker[ExecutorContextT](
       newIndices
     }
 
-    for ((tr, no) <- transitions.zipWithIndex) {
+    // in case we do random simulation, shuffle the indices and stop at the first enabled transition
+    val transitionIndices =
+      if (params.isRandomSimulation) Random.shuffle(transitions.indices.toList) else transitions.indices
+
+    for (no <- transitionIndices) {
       var snapshot: Option[SnapshotT] = None
       if (params.discardDisabled) {
         // save the context, unless the transitions are not checked
         snapshot = Some(trex.snapshot())
       }
-      val translatedOk = trex.prepareTransition(no, tr)
+      val translatedOk = trex.prepareTransition(no, transitions(no))
       if (translatedOk) {
         val transitionInvs = addMaybeInvariants(no)
         val transitionActionInvs = addMaybeActionInvariants(no)
@@ -188,6 +249,16 @@ class SeqModelChecker[ExecutorContextT](
                 }
               }
 
+              if (params.isRandomSimulation) {
+                // When random simulation is enabled, we need only one enabled transition.
+                // recover from the snapshot
+                trex.recover(snapshot.get)
+                // pick one transition
+                logger.info(s"Step ${trex.stepNo}: randomly picked transition $no")
+                trex.pickTransition()
+                return (maybeInvariantNos, maybeActionInvariantNos)
+              }
+
             case Some(false) =>
               // recover the transition before the transition was prepared
               logger.info(s"Step ${trex.stepNo}: Transition #$no is disabled")
@@ -213,15 +284,20 @@ class SeqModelChecker[ExecutorContextT](
     }
 
     if (trex.preparedTransitionNumbers.isEmpty) {
-      if (trex.sat(0).contains(true)) {
-        val filenames = dumpCounterexample(ValEx(TlaBool(true)))
-        logger.error(
-            s"Found a deadlock. Check the counterexample in: \n  ${filenames.mkString("\n  ")}"
-        )
+      if (params.checkForDeadlocks) {
+        if (trex.sat(0).contains(true)) {
+          notifyOnError(checkerInput.rootModule, trex.decodedExecution(), ValEx(TlaBool(true)),
+              searchState.nFoundErrors)
+          logger.error("Found a deadlock.")
+        } else {
+          logger.error(s"Found a deadlock. No SMT model.")
+        }
+        searchState.onResult(Deadlock())
       } else {
-        logger.error(s"Found a deadlock. No SMT model.")
+        val msg = "All executions are shorter than the provided bound."
+        logger.warn(msg)
+        searchState.onResult(ExecutionsTooShort())
       }
-      searchState.onResult(Deadlock())
       (Set.empty, Set.empty)
     } else {
       // pick one transition
@@ -280,9 +356,8 @@ class SeqModelChecker[ExecutorContextT](
           trex.sat(params.smtTimeoutSec) match {
             case Some(true) =>
               searchState.onResult(Error(1))
-              val filenames = dumpCounterexample(notInv)
-              val msg = "State %d: %s invariant %s violated. Check the counterexample in: \n  %s"
-                .format(stateNo, kind, invNo, filenames.mkString("\n  "))
+              notifyOnError(checkerInput.rootModule, trex.decodedExecution(), notInv, searchState.nFoundErrors)
+              val msg = "State %d: %s invariant %s violated.".format(stateNo, kind, invNo)
               logger.error(msg)
               excludePathView()
 
@@ -326,9 +401,8 @@ class SeqModelChecker[ExecutorContextT](
         trex.sat(params.smtTimeoutSec) match {
           case Some(true) =>
             searchState.onResult(Error(1))
-            val filenames = dumpCounterexample(traceInvApp)
-            val msg = "State %d: trace invariant %s violated. Check the counterexample in: \n  %s"
-              .format(stateNo, invNo, filenames.mkString("\n  "))
+            notifyOnError(checkerInput.rootModule, trex.decodedExecution(), traceInvApp, searchState.nFoundErrors)
+            val msg = "State %d: trace invariant %s violated.".format(stateNo, invNo)
             logger.error(msg)
             excludePathView()
 
@@ -356,7 +430,7 @@ class SeqModelChecker[ExecutorContextT](
       val ctorArgs = b.toMap.flatMap { case (key, value) =>
         List(ValEx(TlaStr(key)), value.toNameEx)
       }
-      OperEx(TlaFunOper.`enum`, ctorArgs.toList: _*)(Typed(stateType))
+      OperEx(TlaFunOper.rec, ctorArgs.toList: _*)(Typed(stateType))
     }
 
     // construct a history sequence
@@ -366,11 +440,14 @@ class SeqModelChecker[ExecutorContextT](
     notTraceInv match {
       case TlaOperDecl(_, List(OperParam(name, 0)), body) =>
         // LET Call_$param == hist IN notTraceInv(param)
-        val operType = OperT1(Seq(seqType), BoolT1())
+        val operType = OperT1(Seq(seqType), BoolT1)
         val callName = s"Call_$name"
         // replace param with $callName() in the body
         val app = OperEx(TlaOper.apply, NameEx(callName)(Typed(operType)))(Typed(seqType))
-        val replacedBody = ReplaceFixed(new IdleTracker())({ e => e == NameEx(name)(Typed(seqType)) }, app)(body)
+        val replacedBody =
+          ReplaceFixed(new IdleTracker()).whenMatches({
+                _ == NameEx(name)(Typed(seqType))
+              }, app)(body)
         LetInEx(replacedBody, TlaOperDecl(callName, List(), hist)(Typed(operType)))
 
       case TlaOperDecl(name, _, _) =>
@@ -391,10 +468,10 @@ class SeqModelChecker[ExecutorContextT](
             case _            => false
           }
 
-          repl(isToReplace, assignedEx.copy())(replacedView)
+          repl.whenMatches(isToReplace, assignedEx.copy())(replacedView)
         }
       // the view over state variables should not be equal to the view over the model values
-      val boolTag = Typed(BoolT1())
+      val boolTag = Typed(BoolT1)
       OperEx(TlaBoolOper.not, OperEx(TlaOper.eq, modelView, view)(boolTag))(boolTag)
     }
 
@@ -402,28 +479,8 @@ class SeqModelChecker[ExecutorContextT](
       // extract expressions from the model, as we are going to use these expressions (not the cells!) in path constraints
       val exec = trex.decodedExecution()
       // omit the first assignment, as it contains only assignments to the state variables
-      val pathConstraint = ValEx(TlaBool(true))(Typed(BoolT1())) :: (exec.path.tail.map(_._1).map(computeViewNeq(view)))
+      val pathConstraint = ValEx(TlaBool(true))(Typed(BoolT1)) :: (exec.path.tail.map(_._1).map(computeViewNeq(view)))
       trex.addPathOrConstraint(pathConstraint)
     }
-  }
-
-  private def dumpCounterexample(notInv: TlaEx): List[String] = {
-    val exec = trex.decodedExecution()
-    val states = exec.path.map(p => (p._2.toString, p._1))
-
-    def dump(suffix: String): List[String] = {
-      CounterexampleWriter.writeAllFormats(
-          suffix,
-          checkerInput.rootModule,
-          notInv,
-          states,
-      )
-    }
-
-    // for a human user, write the latest counterexample into counterexample.{tla,json}
-    dump("")
-
-    // for automation scripts, produce counterexample${nFoundErrors}.{tla,json}
-    dump(searchState.nFoundErrors.toString)
   }
 }

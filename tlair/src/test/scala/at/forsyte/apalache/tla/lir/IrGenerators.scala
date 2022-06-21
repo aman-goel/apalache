@@ -19,7 +19,7 @@ import org.scalacheck.Gen.{choose, const, identifier, listOf, listOfN, lzy, oneO
  * Assumptions and limitations:
  *   - The current implementation works best for code that is unaware of the semantics of TLA+ operators.
  *   - Our generators neither produce nor apply higher-order operators.
- *   - The generators tag the produced expressions with either Untyped() or Typed[Int](i) for a random integer value,
+ *   - The generators tag the produced expressions with either Untyped or Typed[Int](i) for a random integer value,
  *     which should be sufficient for checking that the types are correctly propagated.
  *
  * @author
@@ -55,6 +55,11 @@ trait IrGenerators extends TlaType1Gen {
   val maxDeclsPerModule: Int = 10
 
   /**
+   * When false, generated expressions are never Untyped. When true, they may be Untyped or have a type.
+   */
+  val allowUntypedExpressions: Boolean = true
+
+  /**
    * Fundamental operators (`TlaOper._`)
    */
   val simpleOperators = List(TlaOper.eq, TlaOper.ne, TlaOper.chooseBounded, TlaOper.apply)
@@ -82,7 +87,7 @@ trait IrGenerators extends TlaType1Gen {
   /**
    * Function operators (`TlaFunOper._`)
    */
-  val functionOperators = List(TlaFunOper.enum, TlaFunOper.tuple, TlaFunOper.app, TlaFunOper.domain, TlaFunOper.funDef,
+  val functionOperators = List(TlaFunOper.rec, TlaFunOper.tuple, TlaFunOper.app, TlaFunOper.domain, TlaFunOper.funDef,
       TlaFunOper.recFunDef, TlaFunOper.recFunRef, TlaFunOper.except)
 
   /**
@@ -105,7 +110,7 @@ trait IrGenerators extends TlaType1Gen {
    */
   def genTypeTag: Gen[TypeTag] = for {
     tp <- genType1
-    tt <- oneOf(Untyped(), Typed(tp))
+    tt <- oneOf(if (allowUntypedExpressions) Seq(Untyped, Typed(tp)) else Seq(Typed(tp)))
   } yield tt
 
   /**

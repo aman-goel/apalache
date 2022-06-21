@@ -7,7 +7,8 @@ import at.forsyte.apalache.tla.lir.oper._
 import at.forsyte.apalache.tla.lir.values.{TlaBoolSet, TlaStrSet}
 import at.forsyte.apalache.tla.lir.values.TlaBool
 import at.forsyte.apalache.tla.lir.UntypedPredefs._
-import tla2sany.semantic._
+// Prevent shadowing our Context trait
+import tla2sany.semantic.{Context => _, _}
 
 /**
  * Translate operator applications. As many TLA+ expressions are defined via operators, this class is quite complex.
@@ -350,7 +351,7 @@ class OpApplTranslator(
             OperEx(TlaSetOper.filter, op.args.tail :+ op.args.head: _*)
 
           case "$RcdConstructor" =>
-            mkPairsCtorBuiltin(TlaFunOper.enum, node)
+            mkPairsCtorBuiltin(TlaFunOper.rec, node)
 
           case "$SetOfRcds" =>
             mkPairsCtorBuiltin(TlaSetOper.recSet, node)
@@ -678,7 +679,7 @@ object OpApplTranslator {
       ("$SetOfAll", TlaSetOper.map),
       ("$SubsetOf", TlaSetOper.filter),
       ("$Except", TlaFunOper.except),
-      ("$RcdConstructor", TlaFunOper.enum),
+      ("$RcdConstructor", TlaFunOper.rec),
       ("$SetOfRcds", TlaSetOper.recSet),
   )
 }

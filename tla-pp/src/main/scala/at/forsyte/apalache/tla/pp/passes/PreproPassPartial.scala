@@ -1,7 +1,9 @@
 package at.forsyte.apalache.tla.pp.passes
 
+import at.forsyte.apalache.infra.ExitCodes
+import at.forsyte.apalache.infra.passes.Pass.PassResult
 import at.forsyte.apalache.infra.passes.PassOptions
-import at.forsyte.apalache.io.lir.{TlaWriter, TlaWriterFactory}
+import at.forsyte.apalache.io.lir.TlaWriterFactory
 import at.forsyte.apalache.tla.imp.src.SourceStore
 import at.forsyte.apalache.tla.lir.{TlaDecl, TlaModule, TlaOperDecl, UID}
 import at.forsyte.apalache.tla.lir.storage.{ChangeListener, SourceLocator}
@@ -24,7 +26,7 @@ abstract class PreproPassPartial(
   override def name: String = "PreprocessingPass"
 
   protected def writeAndReturn(module: TlaModule): TlaModule = {
-    writerFactory.writeModuleAllFormats(module.copy(name = "08_OutPrepro"), TlaWriter.STANDARD_MODULES)
+    writeOut(writerFactory, module)
     module
   }
 
@@ -56,25 +58,25 @@ abstract class PreproPassPartial(
     }
   }
 
-  protected def postLanguageCheck(tlaModule: TlaModule, lPred: LanguagePred): Option[TlaModule] =
+  protected def postLanguageCheck(tlaModule: TlaModule, lPred: LanguagePred): PassResult =
     // check, whether all expressions fit in the language
     lPred.isModuleOk(tlaModule) match {
       case PredResultOk() =>
-        Some(tlaModule)
+        Right(tlaModule)
 
       case PredResultFail(failedIds) =>
         for ((id, errorMessage) <- failedIds) {
           val message = "%s: unsupported expression: %s".format(findLoc(id), errorMessage)
           logger.error(message)
         }
-        None
+        Left(ExitCodes.FAILURE_SPEC_EVAL)
     }
 
   protected def executeWithParams(
       tlaModule: TlaModule,
       transformationSequence: List[(String, TlaModuleTransformation)],
       postRename: Boolean,
-      lPred: LanguagePred): Option[TlaModule] = {
+      lPred: LanguagePred): PassResult = {
     val afterModule = applyTx(tlaModule, transformationSequence, postRename)
 
     checkLocations(tlaModule)

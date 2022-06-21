@@ -1,9 +1,11 @@
 package at.forsyte.apalache.tla.typecheck.etc
 
 import at.forsyte.apalache.tla.lir.{
-  BoolT1, ConstT1, FunT1, IntT1, OperT1, RealT1, RecT1, SeqT1, SetT1, SparseTupT1, StrT1, TlaType1, TupT1, VarT1,
+  BoolT1, ConstT1, FunT1, IntT1, OperT1, RealT1, RecRowT1, RecT1, RowT1, SeqT1, SetT1, SparseTupT1, StrT1, TlaType1,
+  TupT1, VarT1, VariantT1,
 }
 import at.forsyte.apalache.tla.typecheck.etc.Substitution.SUB_LIMIT
+import scala.collection.immutable.SortedMap
 
 /**
  * A substitution from type variables to types.
@@ -36,7 +38,7 @@ class Substitution(val mapping: Map[EqClass, TlaType1]) {
           (tp, false)
         }
 
-      case IntT1() | BoolT1() | RealT1() | StrT1() | ConstT1(_) =>
+      case IntT1 | BoolT1 | RealT1 | StrT1 | ConstT1(_) =>
         (tp, false)
 
       case SetT1(elem) =>
@@ -53,13 +55,13 @@ class Substitution(val mapping: Map[EqClass, TlaType1]) {
 
       case SparseTupT1(fieldTypes) =>
         val ntypesAndChanged = fieldTypes.map(kv => (kv._1, sub(kv._2)))
-        val ntypes = ntypesAndChanged.mapValues(_._1)
+        val ntypes = ntypesAndChanged.view.mapValues(_._1).toMap.to(SortedMap)
         val isChanged = ntypesAndChanged.exists(_._2._2)
         (SparseTupT1(ntypes), isChanged)
 
       case RecT1(fieldTypes) =>
         val ntypesAndChanged = fieldTypes.map(kv => (kv._1, sub(kv._2)))
-        val ntypes = ntypesAndChanged.mapValues(_._1)
+        val ntypes = ntypesAndChanged.view.mapValues(_._1).toMap.to(SortedMap)
         val isChanged = ntypesAndChanged.exists(_._2._2)
         (RecT1(ntypes), isChanged)
 
@@ -72,6 +74,49 @@ class Substitution(val mapping: Map[EqClass, TlaType1]) {
         val (nargs, isChangedArgs) = args.map(sub).unzip
         val (nres, isChangedRes) = sub(res)
         (OperT1(nargs, nres), isChangedRes || isChangedArgs.contains(true))
+
+      case RowT1(fieldTypes, other) =>
+        val (ntypes, isChangedFields) = fieldTypes.values.toSeq.map(sub).unzip
+        val nfieldTypes = fieldTypes.keys.zip(ntypes).toSeq
+        val hasChangedField = isChangedFields.contains(true)
+        other match {
+          case None =>
+            (RowT1(nfieldTypes: _*), hasChangedField)
+
+          case Some(v) =>
+            val (subv, isChangedVar) = sub(v)
+            // nv is either a variable or a row
+            subv match {
+              case nv @ VarT1(_) =>
+                (RowT1(nv, nfieldTypes: _*), isChangedVar || hasChangedField)
+
+              case RowT1(otherFieldTypes, otherVar) =>
+                (RowT1(otherFieldTypes ++ nfieldTypes, otherVar), isChangedVar || hasChangedField)
+
+              case tp =>
+                throw new IllegalStateException("Expected a var or a row, found: " + tp)
+            }
+        }
+
+      case RecRowT1(row) =>
+        val (newRow, rowChanged) = sub(row)
+        newRow match {
+          case r @ RowT1(_, _) =>
+            (RecRowT1(r), rowChanged)
+
+          case tt =>
+            throw new IllegalStateException("Expected a row after substitution, found: " + tt)
+        }
+
+      case VariantT1(row) =>
+        val (newRow, rowChanged) = sub(row)
+        newRow match {
+          case r @ RowT1(_, _) =>
+            (VariantT1(r), rowChanged)
+
+          case tt =>
+            throw new IllegalStateException("Expected a row after substitution, found: " + tt)
+        }
     }
   }
 

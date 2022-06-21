@@ -1,8 +1,7 @@
 package at.forsyte.apalache.tla.bmcmt.search
 
-import java.io.File
-import at.forsyte.apalache.tla.bmcmt.{oopsla19Encoding, CheckerInput, SMTEncoding}
 import at.forsyte.apalache.tla.bmcmt.search.ModelCheckerParams.InvariantMode.{AfterJoin, BeforeJoin, InvariantMode}
+import at.forsyte.apalache.tla.bmcmt.{oopsla19Encoding, CheckerInput, SMTEncoding}
 
 object ModelCheckerParams {
 
@@ -18,15 +17,17 @@ object ModelCheckerParams {
 /**
  * A collection of model checker parameters that come from the user configuration.
  *
+ * @param stepsBound
+ *   Step bound for bounded model-checking, excluding the initial transition introduced by [[PrimingPass]]. E.g.,
+ *   `stepsBound=1` includes one actual application of the transition operator (e.g., `Next`)
+ *
  * @author
  *   Igor Konnov
  */
 class ModelCheckerParams(
     checkerInput: CheckerInput,
     val stepsBound: Int,
-    val saveDirectory: File,
-    tuningOptions: Map[String, String] = Map(),
-    val debug: Boolean = true) {
+    tuningOptions: Map[String, String] = Map()) {
 
   /**
    * If pruneDisabled is set to false, there will be no check of whether a transition is enabled.
@@ -101,6 +102,24 @@ class ModelCheckerParams(
    * The SMT encoding to be used.
    */
   var smtEncoding: SMTEncoding = oopsla19Encoding
+
+  /**
+   * Is random simulation mode enabled.
+   */
+  val isRandomSimulation: Boolean =
+    tuningOptions.getOrElse("search.simulation", "false").toBoolean
+
+  /**
+   * The number of random simulation runs to try.
+   */
+  val nSimulationRuns: Int =
+    tuningOptions.getOrElse("search.simulation.maxRun", "100").toInt
+
+  /**
+   * Whether to save all visited simulation runs.
+   */
+  val saveRuns: Boolean =
+    tuningOptions.getOrElse("search.simulation.saveRuns", "false").toBoolean
 
   // does the transition number satisfy the given filter at the given step?
   def stepMatchesFilter(stepNo: Int, transitionNo: Int): Boolean = {

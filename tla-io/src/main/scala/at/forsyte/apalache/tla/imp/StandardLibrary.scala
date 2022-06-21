@@ -59,16 +59,24 @@ object StandardLibrary {
         ("Apalache", ":=") -> ApalacheOper.assign,
         ("Apalache", "Gen") -> ApalacheOper.gen,
         ("Apalache", "Skolem") -> ApalacheOper.skolem,
+        ("Apalache", "Guess") -> ApalacheOper.guess,
         ("Apalache", "Expand") -> ApalacheOper.expand,
         ("Apalache", "ConstCardinality") -> ApalacheOper.constCard,
         ("Apalache", "MkSeq") -> ApalacheOper.mkSeq,
         ("Apalache", "SetAsFun") -> ApalacheOper.setAsFun,
-        ("Apalache", "FoldSet") -> ApalacheOper.foldSet,
+        ("Apalache", "ApaFoldSet") -> ApalacheOper.foldSet,
         ("__apalache_folds", "__ApalacheFoldSet") -> ApalacheOper.foldSet,
-        ("Apalache", "FoldSeq") -> ApalacheOper.foldSeq,
+        ("Apalache", "ApaFoldSeqLeft") -> ApalacheOper.foldSeq,
+        // Variants
+        ("Variants", "Variant") -> VariantOper.variant,
+        ("Variants", "VariantFilter") -> VariantOper.variantFilter,
+        ("Variants", "VariantMatch") -> VariantOper.variantMatch,
+        ("Variants", "VariantGet") -> VariantOper.variantGet,
+        // internal modules
         ("__apalache_folds", "__ApalacheFoldSeq") -> ApalacheOper.foldSeq,
-        ("ApalacheInternal", "__NotSupportedByModelChecker") -> ApalacheInternalOper.notSupportedByModelChecker,
-        ("ApalacheInternal", "__ApalacheSeqCapacity") -> ApalacheInternalOper.apalacheSeqCapacity,
+        ("__apalache_folds", "__ApalacheMkSeq") -> ApalacheOper.mkSeq,
+        ("__apalache_internal", "__NotSupportedByModelChecker") -> ApalacheInternalOper.notSupportedByModelChecker,
+        ("__apalache_internal", "__ApalacheSeqCapacity") -> ApalacheInternalOper.apalacheSeqCapacity,
     ) ////
 
   /**
@@ -82,10 +90,11 @@ object StandardLibrary {
         "TLC.tla" -> "__rewire_tlc_in_apalache.tla",
         "Sequences.tla" -> "__rewire_sequences_in_apalache.tla",
         "Bags.tla" -> "__rewire_bags_in_apalache.tla",
+        "BagsExt.tla" -> "__rewire_bags_ext_in_apalache.tla",
         "Functions.tla" -> "__rewire_functions_in_apalache.tla",
         "FiniteSetsExt.tla" -> "__rewire_finite_sets_ext_in_apalache.tla",
-        // will be enabled later
-        //        "SequencesExt.tla" -> "__rewire_sequences_ext_in_apalache.tla",
+        "SequencesExt.tla" -> "__rewire_sequences_ext_in_apalache.tla",
+        "Folds.tla" -> "__rewire_folds_in_apalache.tla",
     ) ////
 
   /**
