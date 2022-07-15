@@ -230,7 +230,13 @@ class Z3SolverContext(val config: SolverConfig) extends SolverContext {
     val array = cellCache(arrayId).head._1
     val elem = cellCache(elemId).head._1
 
-    z3context.mkSelect(array.asInstanceOf[ArrayExpr[Sort, Sort]], elem.asInstanceOf[Expr[Sort]]).asInstanceOf[ExprSort]
+    val tuple = z3context
+      .mkSelect(
+          array.asInstanceOf[ArrayExpr[Sort, Sort]],
+          elem.asInstanceOf[Expr[Sort]],
+      )
+      .asInstanceOf[Expr[DatatypeSort[TupleSort]]]
+    tuple.getSort.getAccessors.apply(0).apply(0).apply(tuple).asInstanceOf[Expr[Sort]]
   }
 
   private def mkNestedSelect(outerArrayId: Int, innerArrayId: Int, elemId: Int): ExprSort = {
@@ -239,11 +245,19 @@ class Z3SolverContext(val config: SolverConfig) extends SolverContext {
     val elem = cellCache(elemId).head._1
 
     val innerSelect = z3context
-      .mkSelect(innerArray.asInstanceOf[ArrayExpr[Sort, Sort]], elem.asInstanceOf[Expr[Sort]])
-      .asInstanceOf[ExprSort]
-    z3context
-      .mkSelect(outerArray.asInstanceOf[ArrayExpr[Sort, Sort]], innerSelect.asInstanceOf[Expr[Sort]])
-      .asInstanceOf[ExprSort]
+      .mkSelect(
+          innerArray.asInstanceOf[ArrayExpr[Sort, Sort]],
+          elem.asInstanceOf[Expr[Sort]],
+      )
+      .asInstanceOf[Expr[DatatypeSort[TupleSort]]]
+    val innerResult = innerSelect.getSort.getAccessors.apply(0).apply(0).apply(innerSelect).asInstanceOf[Expr[Sort]]
+    val outerSelect = z3context
+      .mkSelect(
+          outerArray.asInstanceOf[ArrayExpr[Sort, Sort]],
+          innerResult.asInstanceOf[Expr[Sort]],
+      )
+      .asInstanceOf[Expr[DatatypeSort[TupleSort]]]
+    outerSelect.getSort.getAccessors.apply(0).apply(0).apply(outerSelect).asInstanceOf[Expr[Sort]]
   }
 
   private def mkStore(arrayId: Int, IndexId: Int, elemId: Int = 1): ExprSort = {
@@ -255,9 +269,25 @@ class Z3SolverContext(val config: SolverConfig) extends SolverContext {
     val newEntry = s"${elemT.signature}$elemId"
     log(s";; declare update of $oldEntry to $newEntry")
 
+    // TODO: use cellSorts
+    val tupleSort = z3context.mkTupleSort(
+        z3context.mkSymbol("Tuple_" + arrayT.signature),
+        Array(
+            z3context.mkSymbol("membership").asInstanceOf[Symbol],
+            z3context.mkSymbol("value").asInstanceOf[Symbol],
+        ),
+        Array(
+            getOrMkCellSort(elemT),
+            getOrMkCellSort(indexT),
+        ),
+    )
     val updatedArray = updateArrayConst(arrayId)
-    val store = z3context.mkStore(array.asInstanceOf[Expr[ArraySort[Sort, Sort]]], index.asInstanceOf[Expr[Sort]],
-        elem.asInstanceOf[Expr[Sort]])
+    val tuple = tupleSort.mkDecl().apply(elem.asInstanceOf[Expr[Sort]], index.asInstanceOf[Expr[Sort]])
+    val store = z3context.mkStore(
+        array.asInstanceOf[Expr[ArraySort[Sort, Sort]]],
+        index.asInstanceOf[Expr[Sort]],
+        tuple.asInstanceOf[Expr[Sort]],
+    )
 
     val eqStore = z3context.mkEq(updatedArray, store)
     eqStore.asInstanceOf[ExprSort]
@@ -541,20 +571,77 @@ class Z3SolverContext(val config: SolverConfig) extends SolverContext {
             z3context.getIntSort
 
           case CellTFrom(SetT1(elemType)) if encoding == arraysEncoding =>
-            z3context.mkArraySort(getOrMkCellSort(CellTFrom(elemType)), z3context.getBoolSort)
+            val tupleSymb = z3context.mkSymbol("Tuple_" + cellType.signature)
+            val tupleEntriesSymbs = Array(
+                z3context.mkSymbol("membership").asInstanceOf[Symbol],
+                z3context.mkSymbol("value").asInstanceOf[Symbol],
+            )
+            val tupleEntriesSorts = Array(
+                z3context.getBoolSort.asInstanceOf[Sort],
+                getOrMkCellSort(CellTFrom(elemType)),
+            )
+            val tupleSort = z3context.mkTupleSort(tupleSymb, tupleEntriesSymbs, tupleEntriesSorts)
+            log(s"(declare-datatype (($tupleSymb 0)) ((($tupleSymb (membership Bool) (value ${tupleEntriesSorts.apply(1)}))))")
+            z3context.mkArraySort(getOrMkCellSort(CellTFrom(elemType)), tupleSort)
 
           case InfSetT(elemType) if encoding == arraysEncoding =>
-            z3context.mkArraySort(getOrMkCellSort(elemType), z3context.getBoolSort)
+            val tupleSymb = z3context.mkSymbol("Tuple_" + cellType.signature)
+            val tupleEntriesSymbs = Array(
+                z3context.mkSymbol("membership").asInstanceOf[Symbol],
+                z3context.mkSymbol("value").asInstanceOf[Symbol],
+            )
+            val tupleEntriesSorts = Array(
+                z3context.getBoolSort.asInstanceOf[Sort],
+                getOrMkCellSort(elemType),
+            )
+            val tupleSort = z3context.mkTupleSort(tupleSymb, tupleEntriesSymbs, tupleEntriesSorts)
+            log(s"(declare-datatype (($tupleSymb 0)) ((($tupleSymb (membership Bool) (value ${tupleEntriesSorts.apply(1)}))))")
+            z3context.mkArraySort(getOrMkCellSort(elemType), tupleSort)
 
           case PowSetT(domType) if encoding == arraysEncoding =>
-            z3context.mkArraySort(getOrMkCellSort(CellTFrom(domType)), z3context.getBoolSort)
+            val tupleSymb = z3context.mkSymbol("Tuple_" + cellType.signature)
+            val tupleEntriesSymbs = Array(
+                z3context.mkSymbol("membership").asInstanceOf[Symbol],
+                z3context.mkSymbol("value").asInstanceOf[Symbol],
+            )
+            val tupleEntriesSorts = Array(
+                z3context.getBoolSort.asInstanceOf[Sort],
+                getOrMkCellSort(CellTFrom(domType)),
+            )
+            val tupleSort = z3context.mkTupleSort(tupleSymb, tupleEntriesSymbs, tupleEntriesSorts)
+            log(s"(declare-datatype (($tupleSymb 0)) ((($tupleSymb (membership Bool) (value ${tupleEntriesSorts.apply(1)}))))")
+            z3context.mkArraySort(getOrMkCellSort(CellTFrom(domType)), tupleSort)
 
           case FinFunSetT(domType, cdmType) if encoding == arraysEncoding =>
             val funSort = z3context.mkArraySort(mkCellElemSort(domType), mkCellElemSort(cdmType))
-            z3context.mkArraySort(funSort, z3context.getBoolSort)
+            val tupleSymb = z3context.mkSymbol("Tuple_" + cellType.signature)
+            val tupleEntriesSymbs = Array(
+                z3context.mkSymbol("membership").asInstanceOf[Symbol],
+                z3context.mkSymbol("value").asInstanceOf[Symbol],
+            )
+            val tupleEntriesSorts = Array(
+                z3context.getBoolSort.asInstanceOf[Sort],
+                funSort,
+            )
+            val tupleSort = z3context.mkTupleSort(tupleSymb, tupleEntriesSymbs, tupleEntriesSorts)
+            log(s"(declare-datatype (($tupleSymb 0)) ((($tupleSymb (membership Bool) (value ${tupleEntriesSorts.apply(1)}))))")
+            z3context.mkArraySort(funSort, tupleSort)
 
           case CellTFrom(FunT1(argType, resType)) if encoding == arraysEncoding =>
-            z3context.mkArraySort(getOrMkCellSort(CellTFrom(argType)), getOrMkCellSort(CellTFrom(resType)))
+            val argSort = getOrMkCellSort(CellTFrom(argType))
+            val resSort = getOrMkCellSort(CellTFrom(resType))
+            val tupleSymb = z3context.mkSymbol("Tuple_" + cellType.signature)
+            val tupleEntriesSymbs = Array(
+                z3context.mkSymbol("membership").asInstanceOf[Symbol],
+                z3context.mkSymbol("value").asInstanceOf[Symbol],
+            )
+            val tupleEntriesSorts = Array(
+                resSort,
+                argSort,
+            )
+            val tupleSort = z3context.mkTupleSort(tupleSymb, tupleEntriesSymbs, tupleEntriesSorts)
+            log(s"(declare-datatype (($tupleSymb 0)) ((($tupleSymb (membership Bool) (value ${tupleEntriesSorts.apply(1)}))))")
+            z3context.mkArraySort(argSort, tupleSort)
 
           case _ =>
             log(s"(declare-sort $sig 0)")
@@ -578,7 +665,10 @@ class Z3SolverContext(val config: SolverConfig) extends SolverContext {
       // Explicitly annotate existential type of `newDefault`. Fixes "inferred existential type ..., which cannot be
       // expressed by wildcards, should be enabled by making the implicit value scala.language.existentials visible."
       val newDefault: Expr[_1] forSome { type _1 <: Sort } = cellSort match {
-        case _: BoolSort =>
+        case _: BoolSort if isInfiniteSet =>
+          z3context.mkTrue()
+
+        case _: BoolSort if !isInfiniteSet =>
           z3context.mkFalse()
 
         case _: IntSort =>
@@ -586,10 +676,17 @@ class Z3SolverContext(val config: SolverConfig) extends SolverContext {
 
         case arraySort: ArraySort[_, _] if isInfiniteSet =>
           // Infinite sets are not cached because they are not empty
-          return z3context.mkConstArray(arraySort.getDomain, z3context.mkTrue()).asInstanceOf[ExprSort]
+          z3context.mkConstArray(arraySort.getDomain, getOrMkCellDefaultValue(arraySort.getRange))
 
         case arraySort: ArraySort[_, _] if !isInfiniteSet =>
           z3context.mkConstArray(arraySort.getDomain, getOrMkCellDefaultValue(arraySort.getRange))
+
+        case tupleSort: DatatypeSort[TupleSort] =>
+          val tupleFun = tupleSort.getConstructors.apply(0)
+          val entry1 = getOrMkCellDefaultValue(tupleSort.getAccessors.apply(0).apply(0).getRange.asInstanceOf[Sort])
+          val entry2 = getOrMkCellDefaultValue(tupleSort.getAccessors.apply(0).apply(1).getRange.asInstanceOf[Sort])
+          val tuple = tupleFun.apply(entry1, entry2)
+          tuple
 
         case _ =>
           log(s"(declare-const $sig $cellSort)")
@@ -805,23 +902,123 @@ class Z3SolverContext(val config: SolverConfig) extends SolverContext {
         }
 
       case OperEx(ApalacheInternalOper.smtMap(mapOper), NameEx(inputSetName), NameEx(resultSetName)) =>
+        val (_, arrayT, _) = cellCache(ArenaCell.idFromName(inputSetName)).head
+
+        // TODO: refactor/cache tuple sort
+        val tupleValue1Sort = getOrMkCellSort(arrayT)
+          .asInstanceOf[ArraySort[Sort, DatatypeSort[TupleSort]]]
+          .getRange
+          .getAccessors
+          .apply(0)
+          .apply(0)
+          .getRange
+          .asInstanceOf[Sort]
+        val tupleValue2Sort = getOrMkCellSort(arrayT)
+          .asInstanceOf[ArraySort[Sort, DatatypeSort[TupleSort]]]
+          .getRange
+          .getAccessors
+          .apply(0)
+          .apply(1)
+          .getRange
+          .asInstanceOf[Sort]
+        val tupleSort = z3context
+          .mkTupleSort(
+              z3context.mkSymbol("Tuple_" + arrayT.signature),
+              Array(
+                  z3context.mkSymbol("membership").asInstanceOf[Symbol],
+                  z3context.mkSymbol("value").asInstanceOf[Symbol],
+              ),
+              Array(
+                  tupleValue1Sort,
+                  tupleValue2Sort,
+              ),
+          )
+          .asInstanceOf[TupleSort]
+
+        // TODO: refactor forall declaration
         val mapOperDecl = mapOper match {
           case TlaBoolOper.and =>
-            z3context.mkAnd().getFuncDecl
+            val funName = s"fun_${mapOper.name}"
+            val decl = z3context.mkFuncDecl(funName, Array(tupleSort, tupleSort).asInstanceOf[Array[Sort]], tupleSort)
+            log(s"(declare-fun $funName ($tupleSort $tupleSort) $tupleSort)")
+
+            val symb0 = z3context.mkSymbol(s"tup0_${arrayT.signature}").asInstanceOf[Symbol]
+            val symb1 = z3context.mkSymbol(s"tup1_${arrayT.signature}").asInstanceOf[Symbol]
+            val boundVar0 = z3context.mkBound(0, tupleSort)
+            val boundVar1 = z3context.mkBound(1, tupleSort)
+
+            val boundVar0Membership = tupleSort.getFieldDecls.apply(0).apply(boundVar0).asInstanceOf[BoolExpr]
+            val boundVar1Membership = tupleSort.getFieldDecls.apply(0).apply(boundVar1).asInstanceOf[BoolExpr]
+            val boundVar0Value = tupleSort.getFieldDecls.apply(1).apply(boundVar0).asInstanceOf[Expr[Sort]]
+            val boundVar1Value = tupleSort.getFieldDecls.apply(1).apply(boundVar1).asInstanceOf[Expr[Sort]]
+
+            val funApp = decl.apply(boundVar0, boundVar1)
+            val membershipRes = z3context.mkAnd(boundVar0Membership, boundVar1Membership)
+            val valueRes = z3context.mkITE(boundVar0Membership, boundVar0Value, boundVar1Value)
+            val funRes = tupleSort.mkDecl().apply(membershipRes, valueRes)
+            val quantifierBody = z3context.mkEq(funApp, funRes).asInstanceOf[Expr[BoolSort]]
+
+            val forall = z3context.mkForall(
+                Array(tupleSort, tupleSort),
+                Array(symb0, symb1),
+                quantifierBody,
+                0,
+                Array(),
+                Array(),
+                z3context.mkSymbol(s"quantifierID_${arrayT.signature}"),
+                z3context.mkSymbol(s"skolemID_${arrayT.signature}"),
+            )
+            z3solver.add(forall)
+            // TODO: add forall log
+            decl
+
           case TlaBoolOper.or =>
-            z3context.mkOr().getFuncDecl
+            val funName = s"fun_${mapOper.name}"
+            val decl = z3context.mkFuncDecl(funName, Array(tupleSort, tupleSort).asInstanceOf[Array[Sort]], tupleSort)
+            log(s"(declare-fun $funName ($tupleSort $tupleSort) $tupleSort)")
+
+            val symb0 = z3context.mkSymbol(s"tup0_${arrayT.signature}").asInstanceOf[Symbol]
+            val symb1 = z3context.mkSymbol(s"tup1_${arrayT.signature}").asInstanceOf[Symbol]
+            val boundVar0 = z3context.mkBound(0, tupleSort)
+            val boundVar1 = z3context.mkBound(1, tupleSort)
+
+            val boundVar0Membership = tupleSort.getFieldDecls.apply(0).apply(boundVar0).asInstanceOf[BoolExpr]
+            val boundVar1Membership = tupleSort.getFieldDecls.apply(0).apply(boundVar1).asInstanceOf[BoolExpr]
+            val boundVar0Value = tupleSort.getFieldDecls.apply(1).apply(boundVar0).asInstanceOf[Expr[Sort]]
+            val boundVar1Value = tupleSort.getFieldDecls.apply(1).apply(boundVar1).asInstanceOf[Expr[Sort]]
+
+            val funApp = decl.apply(boundVar0, boundVar1)
+            val membershipRes = z3context.mkOr(boundVar0Membership, boundVar1Membership)
+            val valueRes = z3context.mkITE(boundVar0Membership, boundVar0Value, boundVar1Value)
+            val funRes = tupleSort.mkDecl().apply(membershipRes, valueRes)
+            val quantifierBody = z3context.mkEq(funApp, funRes).asInstanceOf[Expr[BoolSort]]
+
+            val forall = z3context.mkForall(
+                Array(tupleSort, tupleSort),
+                Array(symb0, symb1),
+                quantifierBody,
+                0,
+                Array(),
+                Array(),
+                z3context.mkSymbol(s"quantifierID_${arrayT.signature}"),
+                z3context.mkSymbol(s"skolemID_${arrayT.signature}"),
+            )
+            z3solver.add(forall)
+            // TODO: add forall log
+            decl
+
           case _ =>
             throw new IllegalArgumentException(s"Unexpected SMT map operator of type $mapOper")
         }
         val inputSetId = ArenaCell.idFromName(inputSetName)
         val resultSetId = ArenaCell.idFromName(resultSetName)
         // The latest SSA array for resultSet contains the constraints. An updated SSA array is made to store the result
-        val inputSet = cellCache(inputSetId).head._1.asInstanceOf[ArrayExpr[Sort, BoolSort]]
-        val constraintsSet = cellCache(resultSetId).head._1.asInstanceOf[ArrayExpr[Sort, BoolSort]]
-        val updatedResultSet = updateArrayConst(resultSetId).asInstanceOf[ArrayExpr[Sort, BoolSort]]
+        val inputSet = cellCache(inputSetId).head._1.asInstanceOf[Expr[ArraySort[Sort, TupleSort]]]
+        val constraintsSet = cellCache(resultSetId).head._1.asInstanceOf[Expr[ArraySort[Sort, TupleSort]]]
+        val updatedResultSet = updateArrayConst(resultSetId).asInstanceOf[Expr[ArraySort[Sort, TupleSort]]]
         // The intersection of inputSet and constraintsSet is taken and equated to updatedResultSet
-        val map = z3context.mkMap(mapOperDecl, inputSet, constraintsSet)
-        val eq = toEqExpr(updatedResultSet, map)
+        val map = z3context.mkMap(mapOperDecl, inputSet, constraintsSet).asInstanceOf[Expr[ArraySort[Sort, TupleSort]]]
+        val eq = z3context.mkEq(updatedResultSet, map) // TODO: use toEqExpr
         (eq.asInstanceOf[ExprSort], 2)
 
       case OperEx(ApalacheInternalOper.unconstrainArray, NameEx(arrayElemName)) =>
